@@ -154,14 +154,14 @@ class Resp:
 class Net:
     states = []; routes = {}; route_err = set(); fail_opensky = False
     aircraft = {}; adb_status = 200; adb_json = None; gh = None
-    os_exc = None; adsb = None
+    os_exc = None; adsb = None; adb_delay = 0; logo_delay = 0
     calls = {"opensky": 0, "adb": 0, "github": 0, "adsbdb": 0, "adsblol": 0}
     log = []     # (url) tüm istekler
     @classmethod
     def reset(cls):
         cls.states = []; cls.routes = {}; cls.route_err = set(); cls.fail_opensky = False
         cls.aircraft = {}; cls.adb_status = 200; cls.adb_json = None; cls.gh = None
-        cls.os_exc = None; cls.adsb = None
+        cls.os_exc = None; cls.adsb = None; cls.adb_delay = 0; cls.logo_delay = 0
         cls.calls = {"opensky": 0, "adb": 0, "github": 0, "adsbdb": 0, "adsblol": 0}; cls.log = []
 
 def rget(url, params=None, headers=None, timeout=None, **kw):
@@ -176,6 +176,7 @@ def rget(url, params=None, headers=None, timeout=None, **kw):
         return Resp(Net.adsb)
     if "aerodatabox" in url:
         Net.calls["adb"] += 1
+        if Net.adb_delay: time.sleep(Net.adb_delay)
         return Resp(Net.adb_json if Net.adb_json is not None else {}, Net.adb_status)
     if "/callsign/" in url:
         Net.calls["adsbdb"] += 1
@@ -190,6 +191,7 @@ def rget(url, params=None, headers=None, timeout=None, **kw):
     if "open-meteo" in url:
         return Resp({"current": {"temperature_2m": 12.4, "weather_code": 3, "wind_speed_10m": 20, "wind_direction_10m": 215}})
     if url.endswith(".png") or "avs.io" in url:
+        if Net.logo_delay: time.sleep(Net.logo_delay)
         return Resp(None, 200, "image/png", b"x" * 500)
     return Resp(None, 404)
 

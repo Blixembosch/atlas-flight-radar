@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.1)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.2)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -16,6 +16,7 @@ Ayarlar .streamlit/secrets.toml içindedir (örnek: secrets.toml.example).
 import base64
 import html
 import math
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -905,6 +906,48 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
   return flights
 
 
+_BG = {"logo": set(), "threads": []}
+_BG_LOCK = threading.Lock()
+
+
+def _spawn(fn, *args):
+  t = threading.Thread(target=fn, args=args, daemon=True, name="radar-bg")
+  with _BG_LOCK:
+    _BG["threads"] = [x for x in _BG["threads"] if x.is_alive()] + [t]
+  t.start()
+  return t
+
+
+def join_background(timeout=10):
+  """Testler için: bekleyen arka plan işlerinin bitmesini bekler."""
+  for t in list(_BG["threads"]):
+    t.join(timeout)
+
+
+def peek_logo(key, iata, store):
+  """Beklemeden logo: önbellekte varsa verir, yoksa arka planda indirmeyi başlatır.
+  (logo, bekliyor_mu) döndürür."""
+  ck = ("logo", key, iata)
+  hit = store.get(ck)
+  if hit and hit[0] > time.time():
+    return hit[1], False
+  with _BG_LOCK:
+    if ck in _BG["logo"]:
+      return (hit[1] if hit else ""), True
+    _BG["logo"].add(ck)
+
+  def work():
+    try:
+      fetch_logo(key, iata, store)
+    except Exception:
+      pass
+    finally:
+      with _BG_LOCK:
+        _BG["logo"].discard(ck)
+  _spawn(work)
+  return (hit[1] if hit else ""), True
+
+
 def attach_logos(flights, store):
   """Her havayolu için logoyu (yerel dosya ya da internetten) bir kez getirir."""
   keys = sorted({(f["airline_key"], f["airline_iata"]) for f in flights
@@ -1709,11 +1752,21 @@ def page_terminal(db, store, demo, refresh_s_box):
   except (TypeError, ValueError):
     monthly = fids.DEFAULT_MONTHLY_UNITS
 
-  res = {"error": "", "reason": ""}
+  t0 = time.time()
   if not demo and key:
-    res = fids.refresh(db, key, now, host=host, monthly_units=monthly)
-    if res.get("fetched"):
-      db.maybe_push()
+    bs0 = fids.budget_state(db, now, monthly)
+    due, _why = fids.due_for_refresh(db, now, bs0)
+    if due:
+      if fids.data_age_min(db, now) is None:      # hiç veri yok: ilk seferde bekle
+        with st.spinner("Tarife yükleniyor…"):
+          fids.refresh(db, key, now, host=host, monthly_units=monthly)
+        db.maybe_push()
+      else:                                      # veri var: arka planda güncelle, ekranı bekletme
+        def _bg():
+          fids.refresh(db, key, fids.now_local(), host=host, monthly_units=monthly)
+          db.maybe_push()
+        _spawn(_bg)
+  res = {"error": "" if demo else (db.meta_get("fids_last_error") or "")}
 
   q1, q2 = st.columns([3, 1.2], vertical_alignment="center")
   with q1:
@@ -1731,11 +1784,15 @@ def page_terminal(db, store, demo, refresh_s_box):
     dep, dep_total = fids.select_board(db, "DEP", now, limit, query=query)
     arr, arr_total = fids.select_board(db, "ARR", now, limit, query=query)
 
-  # Logolar (her havayolu bir kez)
+  # Logolar: beklemeden (önbellekte olanlar hemen, olmayanlar arka planda indirilir)
   pairs = sorted({(airline_key_for(r), r.get("airline_iata") or "") for r in dep + arr} - {("", "")})
-  with ThreadPoolExecutor(ENRICH_WORKERS) as pool:
-    got = list(pool.map(lambda kp: fetch_logo(kp[0], kp[1], store), pairs)) if pairs else []
-  logos = {kp[0]: v for kp, v in zip(pairs, got)}
+  logos, pending = {}, False
+  for k_, i_ in pairs:
+    v, p_ = peek_logo(k_, i_, store)
+    logos[k_] = v
+    pending = pending or p_
+  if pending:
+    refresh_s_box[-1] = 5      # logolar gelince hemen göster (sonra 60 sn'ye döner)
 
   st.markdown(fids_logo_css(logos) + term_head_html(now, mode, age), unsafe_allow_html=True)
 
@@ -1772,7 +1829,7 @@ def page_terminal(db, store, demo, refresh_s_box):
     foot = (f"Tarife: AeroDataBox · bu ay {bs['used']}/{bs['cap']} kota birimi kullanıldı · "
             f"yaklaşık {bs['interval_h']:.1f} saatte bir yenilenir")
   st.markdown(f"<div class='foot'>{esc(foot)} · Saatler Hollanda saatidir. Gecikme = planlanan ile "
-              "tahmini/gerçekleşen saat farkı.</div>", unsafe_allow_html=True)
+              f"tahmini/gerçekleşen saat farkı. · sayfa {time.time() - t0:.1f} sn</div>", unsafe_allow_html=True)
 
 
 def _backup_now():

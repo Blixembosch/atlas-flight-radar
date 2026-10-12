@@ -149,6 +149,7 @@ ck("daha fazla: 30 satır", n_rows(a4) == 30 and n_rows(d4) == 30, (n_rows(a4), 
 Net.adb_status = 403
 db.meta_set(fids_last_fetch="2000-01-01T00:00")     # yenileme zamanı gelmiş say
 run()
+radar.join_background(); run()
 a5, _ = panels()
 ck("API hata verse de önbellek gösterilir", n_rows(a5) >= 20)
 ck("hata uyarısı gösterilir (anahtar sızmadan)", "güncellenemedi" in md() and "adbkey" not in md())
