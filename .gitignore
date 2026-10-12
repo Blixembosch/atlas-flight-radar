@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.streamlit/secrets.toml
+.DS_Store
+# Veritabanı dosyası ana dala girmez; `data` dalında tutulur
+db/*.db
+db/*.db-journal
+tests/shots/

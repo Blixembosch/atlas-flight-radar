@@ -1,16 +1,16 @@
 """
-Eindhoven Kuzey Koridoru Uçak Radarı  (v0.2 - tek ekran, harita merkezli)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3)
+  * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
+  * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
+  * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
+  * Açılışta şifre (APP_PASSWORD)
 
 Kurulum:
-    pip install streamlit requests folium streamlit-folium streamlit-autorefresh
+    pip install -r requirements.txt
 Çalıştırma:
     streamlit run Radar.py
 
-Opsiyonel:
-  * assets/logos/<KOD>.png|svg|webp  -> havayolu logoları (TRA.png, RYR.svg, WZZ.png, TUI.png ...)
-  * .streamlit/secrets.toml          -> OpenSky hesabın varsa günlük sorgu limiti artar:
-        opensky_client_id = "..."
-        opensky_client_secret = "..."
+Ayarlar .streamlit/secrets.toml içindedir (örnek: secrets.toml.example).
 """
 
 import base64
@@ -18,12 +18,16 @@ import html
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
 import streamlit as st
+
+import radar_auth
+import radar_db
+import radar_fids as fids
 
 try:
   import folium
@@ -45,7 +49,8 @@ except ImportError:
 # =============================================================================
 TZ = ZoneInfo("Europe/Amsterdam")
 
-HOME_LAT, HOME_LON = 51.4951, 5.4779  # Panorama (5629 TT) civarı; ekranda adres yazmaz
+HOME_LAT, HOME_LON = 51.4951, 5.4779  # Panorama (5629 TT) civarı; ekranda adres yazmaz.
+# Depo herkese açıksa HOME_LAT / HOME_LON değerlerini secrets içine yazıp buradakini yaklaşık bırakabilirsin.
 AIRPORT_LAT, AIRPORT_LON = 51.4501, 5.3743  # Eindhoven Havalimanı
 AIRPORT_ICAO = "EHEH"
 
@@ -285,6 +290,114 @@ div.stButton>button:hover{border-color:#38bdf8;color:#fff;}
 .lgring.blue{border:1.5px dashed #3b82f6;background:rgba(59,130,246,.12);}
 .lgring.grey{border:1.5px dotted #94a3b8;}
 .foot{text-align:center;color:#5d6a8c;font-size:.72rem;margin-top:16px;}
+/* ===== v0.3 ===== */
+.block-container{padding-top:1.1rem!important;}
+.topbar{box-shadow:0 8px 30px rgba(20,10,60,.35);}
+.fcard{transition:transform .12s ease,border-color .12s ease;}
+.fcard:hover{transform:translateY(-2px);border-color:#38bdf8;}
+.panel{box-shadow:0 8px 28px rgba(0,0,0,.25);}
+
+/* Gezinme çubuğu */
+.st-key-nav{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:8px 12px;margin:0 0 12px;}
+.st-key-nav [data-testid="stHorizontalBlock"]{align-items:center;gap:12px;}
+.st-key-nav [data-testid="stElementContainer"]{margin:0;}
+.st-key-nav [data-testid="stRadio"] [role="radiogroup"]{gap:8px;flex-wrap:wrap;}
+.st-key-nav [data-testid="stRadio"] label{background:#0e1630;border:1px solid var(--line);border-radius:12px;
+  padding:7px 18px;margin:0;cursor:pointer;transition:all .12s ease;}
+.st-key-nav [data-testid="stRadio"] label>div:first-child{display:none;}
+.st-key-nav [data-testid="stRadio"] label p{font-weight:700;font-size:.92rem;color:#cdd5ea;white-space:nowrap;}
+.st-key-nav [data-testid="stRadio"] label:hover{border-color:#38bdf8;}
+.st-key-nav [data-testid="stRadio"] label:has(input:checked){background:linear-gradient(120deg,#2b3a9a,#6a35b8);
+  border-color:rgba(255,255,255,.25);}
+.st-key-nav [data-testid="stRadio"] label:has(input:checked) p{color:#fff;}
+.st-key-nav [data-testid="stToggle"] p{white-space:nowrap;font-weight:600;font-size:.85rem;}
+
+/* Giriş ekranı */
+.login-card{text-align:center;background:linear-gradient(160deg,#16204a,#1b1740);border:1px solid var(--line);
+  border-radius:22px;padding:30px 24px 18px;margin:9vh 0 12px;box-shadow:0 18px 50px rgba(0,0,0,.4);}
+.login-card .big{font-size:3.2rem;line-height:1;}
+.login-card h1{font-size:1.45rem;margin:10px 0 4px;color:#fff;font-weight:800;letter-spacing:-.3px;}
+.login-card p{color:var(--muted);font-size:.86rem;margin:0 0 6px;}
+
+/* Terminal (varış / kalkış) */
+.term-head{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+  background:linear-gradient(120deg,#0f2a55 0%,#12306b 50%,#1b2a74 100%);border:1px solid rgba(255,255,255,.12);
+  border-radius:18px;padding:14px 22px;margin-bottom:12px;}
+.term-head .tt{font-size:1.45rem;font-weight:800;color:#fff;letter-spacing:-.3px;}
+.term-head .tt span{font-size:.8rem;font-weight:700;color:#7dd3fc;margin-left:10px;letter-spacing:.08em;}
+.term-head .ts{font-size:.78rem;color:#b6c4e8;margin-top:2px;}
+.term-head .tr{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.clock{font-size:1.9rem;font-weight:800;color:#fff;font-variant-numeric:tabular-nums;letter-spacing:.02em;}
+.livepill{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:5px 12px;font-size:.78rem;font-weight:700;
+  background:rgba(10,14,32,.5);border:1px solid rgba(255,255,255,.16);color:#fff;white-space:nowrap;}
+.livepill i{width:8px;height:8px;border-radius:50%;display:inline-block;background:#94a3b8;}
+.livepill.ok i{background:#22c55e;box-shadow:0 0 8px #22c55e;} .livepill.old i{background:#f59e0b;}
+.livepill.demo i{background:#f59e0b;} .livepill.none i{background:#ef4444;}
+.tpanel{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 8px 28px rgba(0,0,0,.22);}
+.tphead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;
+  border-bottom:1px solid var(--line);}
+.tphead.arr{background:linear-gradient(90deg,rgba(56,189,248,.20),rgba(56,189,248,0));}
+.tphead.dep{background:linear-gradient(90deg,rgba(251,146,60,.22),rgba(251,146,60,0));}
+.tphead .nm{font-size:1.12rem;font-weight:800;color:#fff;} .tphead .nm small{color:var(--muted);font-weight:600;font-size:.76rem;margin-left:8px;}
+.tphead .ct{font-size:.76rem;color:var(--muted);font-weight:600;}
+.fgrid{display:grid;align-items:center;gap:10px;padding:0 16px;}
+.fgrid.arr{grid-template-columns:70px minmax(0,1.5fr) minmax(0,1.5fr) 118px 70px;}
+.fgrid.dep{grid-template-columns:70px minmax(0,1.5fr) minmax(0,1.5fr) 46px 118px 70px;}
+.fcols{padding-top:8px;padding-bottom:8px;font-size:.66rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+  color:#6f7da3;border-bottom:1px solid var(--line);background:#0f1730;}
+.frow{min-height:52px;border-bottom:1px solid rgba(34,48,86,.55);transition:background .1s ease;}
+.frow:hover{background:rgba(56,189,248,.06);}
+.frow.done{opacity:.5;} .frow.canc .c-fl b,.frow.canc .c-time b{text-decoration:line-through;}
+.frow.next{background:linear-gradient(90deg,rgba(250,204,21,.10),rgba(250,204,21,0));box-shadow:inset 3px 0 0 #facc15;}
+.c-time b{display:block;font-size:1.05rem;color:#fff;font-variant-numeric:tabular-nums;line-height:1.1;}
+.c-time small{display:block;font-size:.72rem;color:#fbbf24;font-weight:700;font-variant-numeric:tabular-nums;}
+.c-fl,.c-pl{display:flex;align-items:center;gap:10px;min-width:0;}
+.c-fl div,.c-pl div{min-width:0;}
+.c-fl b,.c-pl b{display:block;color:#fff;font-size:.92rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.c-fl small,.c-pl small{display:block;color:var(--muted);font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fg{font-size:1.35rem;flex:none;}
+.alogo{flex:none;width:44px;height:30px;border-radius:8px;background:#eef0f4 center/contain no-repeat;
+  background-origin:content-box;padding:3px;box-sizing:border-box;box-shadow:0 1px 4px rgba(0,0,0,.35);}
+.alogo.txt{display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:900;padding:0;}
+.c-gate{text-align:center;font-weight:800;color:#e2e8f0;font-size:.9rem;}
+.c-gate.na{color:#475569;font-weight:600;}
+.pill{display:inline-block;border-radius:999px;padding:4px 10px;font-size:.74rem;font-weight:800;white-space:nowrap;}
+.pill.ok{background:rgba(34,197,94,.16);color:#86efac;} .pill.warn{background:rgba(245,158,11,.18);color:#fcd34d;}
+.pill.bad{background:rgba(239,68,68,.18);color:#fca5a5;} .pill.info{background:rgba(56,189,248,.14);color:#7dd3fc;}
+.pill.done{background:rgba(148,163,184,.14);color:#cbd5e1;}
+.c-dl{text-align:right;font-weight:800;font-size:.86rem;font-variant-numeric:tabular-nums;color:#475569;}
+.c-dl.warn{color:#fbbf24;} .c-dl.bad{color:#f87171;} .c-dl.ok{color:#4ade80;}
+.tempty{text-align:center;color:var(--muted);padding:40px 16px;font-size:.9rem;line-height:1.6;}
+.tempty .big{font-size:2.6rem;}
+.tfoot{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:8px 16px;font-size:.72rem;color:#5d6a8c;}
+.tnote{margin:10px 0 0;padding:8px 14px;border-radius:12px;background:var(--card);border:1px solid var(--line);font-size:.8rem;color:#cdd5ea;}
+.tnote.warn{border-color:rgba(245,158,11,.5);}
+
+/* Gözlem defteri */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px;}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;}
+.kpi small{display:block;color:var(--muted);font-size:.7rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;}
+.kpi b{display:block;font-size:1.9rem;color:#fff;line-height:1.15;}
+.kpi span{font-size:.78rem;color:#9aa7c7;}
+.bars{display:flex;align-items:flex-end;gap:10px;height:110px;padding:10px 6px 0;}
+.bar{flex:1;text-align:center;display:flex;flex-direction:column;justify-content:flex-end;height:100%;}
+.bar i{display:block;border-radius:8px 8px 3px 3px;background:linear-gradient(180deg,#38bdf8,#6d4aff);min-height:3px;}
+.bar b{font-size:.78rem;color:#fff;margin-bottom:3px;} .bar small{font-size:.68rem;color:var(--muted);margin-top:4px;}
+.sight{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
+  border-radius:14px;padding:10px 14px;margin-bottom:8px;}
+.sight .sd{flex:1;min-width:0;} .sight b{color:#fff;} .sight small{display:block;color:var(--muted);font-size:.76rem;}
+.sight .tm{font-variant-numeric:tabular-nums;color:#cbd5e1;font-weight:700;font-size:.82rem;white-space:nowrap;}
+.box{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 16px;margin-bottom:12px;}
+.box h4{margin:0 0 6px;color:#fff;font-size:.95rem;}
+
+@media (max-width:900px){
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .fgrid.arr,.fgrid.dep{grid-template-columns:52px minmax(0,1.25fr) minmax(0,1.15fr) auto;gap:8px;padding:0 12px;}
+  .fgrid .c-dl,.fgrid .c-gate,.fgrid .alogo,.fcols>div:last-child{display:none;}
+  .fgrid.dep.fcols>div:nth-child(4){display:none;}
+  .c-pl .fg{font-size:1.1rem;}
+  .clock{font-size:1.5rem;}
+}
 </style>
 """
 
@@ -413,7 +526,8 @@ def cached(store, key, ttl_ok, ttl_fail, fn):
   if hit and hit[0] > now:
     return hit[1]
   val = fn()
-  store[key] = (now + (ttl_ok if val else ttl_fail), val)
+  failed = (not val) or (isinstance(val, dict) and val.get("_state") == "err")
+  store[key] = (now + (ttl_fail if failed else ttl_ok), val)
   if len(store) > 3000:
     for k in [k for k, v in store.items() if v[0] < now]:
       store.pop(k, None)
@@ -430,12 +544,33 @@ def _get_json(url, timeout=3):
   return None
 
 
+def _get_json_ex(url, timeout=3):
+  """('ok'|'none'|'err', json). 404 = kayıt gerçekten yok ('none'); ağ/sunucu hatası = 'err'."""
+  try:
+    r = requests.get(url, timeout=timeout)
+    if r.status_code == 200:
+      return "ok", r.json()
+    if r.status_code == 404:
+      return "none", None
+  except (requests.RequestException, ValueError):
+    pass
+  return "err", None
+
+
 def lookup_route(callsign, store):
-  """adsbdb: çağrı kodundan rota (kalkış/varış, havayolu)."""
+  """adsbdb: çağrı kodundan rota (kalkış/varış, havayolu).
+
+  Sonuç sözlüğü: rota varsa adsbdb 'flightroute' alanları; yoksa {"_state": "none"};
+  geçici hata ise {"_state": "err"} (kısa süre saklanır, uçak gizlenmez)."""
   def go():
-    j = _get_json(f"{ADSBDB}/callsign/{callsign}") or {}
-    resp = j.get("response")
-    return (resp.get("flightroute") or {}) if isinstance(resp, dict) else {}
+    state, j = _get_json_ex(f"{ADSBDB}/callsign/{callsign}")
+    if state == "err":
+      return {"_state": "err"}
+    resp = (j or {}).get("response")
+    fr = (resp.get("flightroute") or {}) if isinstance(resp, dict) else {}
+    if fr and (fr.get("origin") or fr.get("destination")):
+      return fr
+    return {"_state": "none"}
   return cached(store, ("route", callsign), 900, 120, go)
 
 
@@ -593,7 +728,9 @@ def _candidates(states, overflights=False, coverage_km=NEAR_KM):
   return out
 
 
-def build_flights(states, store, overflights=False, coverage_km=NEAR_KM):
+def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_unknown=False, stats=None):
+  """stats (sözlük) verilirse stats["hidden_unknown"] = rotası bilinmediği için gizlenen uçak sayısı."""
+  hidden = 0
   cands = _candidates(states, overflights, coverage_km)
   callsigns = sorted({(c[0][1] or "").strip() for c in cands} - {""})
   hexes = sorted({c[0][0] for c in cands})
@@ -607,6 +744,13 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM):
     callsign = (s[1] or "").strip()
     lon, lat = s[5], s[6]
     route = routes.get(callsign) or {}
+    pending = route.get("_state") == "err"           # geçici hata: uçağı gizleme, tekrar denenecek
+    if route.get("_state"):
+      route = {}
+    has_route = bool(route.get("origin") or route.get("destination"))
+    if not has_route and not pending and not show_unknown:
+      hidden += 1                                    # rotası bilinmiyor: listede/haritada gösterme
+      continue
     ac = acs.get(icao24) or {}
     prefix = callsign[:3].upper() if callsign[:3].isalpha() else ""
     akey, aname, aiata = resolve_airline(prefix, route, ac)
@@ -616,7 +760,7 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM):
     from_ein = bool(origin and origin["icao"] == AIRPORT_ICAO)
 
     # Uzaktan gelenler yalnızca EIN'e iniyorsa tutulur
-    if kind == "inbound" and not (to_ein or (not route and d_air <= 80)):
+    if kind == "inbound" and not (to_ein or (not has_route and d_air <= 80)):
       continue
 
     vrate = s[11] or 0
@@ -624,7 +768,7 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM):
       direction = "ARR"
     elif from_ein:
       direction = "DEP"
-    elif route or kind == "transit":  # rotası bilinen ve EIN ile ilgisi olmayan
+    elif has_route or kind == "transit":  # rotası bilinen ve EIN ile ilgisi olmayan
       direction = "TRN"
     else:
       direction = "ARR" if vrate < 0 else "DEP"
@@ -656,8 +800,11 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM):
         "type_code": tcode, "type_name": tname, "capacity": capacity, "fact": fact,
         "reg": ac.get("registration") or "", "photo": ac.get("url_photo_thumbnail") or "",
         "photo_credit": "", "country": s[2] or "", "tpos": s[3] or s[4] or 0,
+        "route_known": has_route, "route_pending": pending,
     }
     flights.append(enrich_geometry(f))
+  if stats is not None:
+    stats["hidden_unknown"] = hidden
   return flights
 
 
@@ -773,7 +920,7 @@ def dir_badge(f):
 def route_short(f):
   o, d = f["origin"], f["dest"]
   if not (o or d):
-    return "Rota bilinmiyor"
+    return "Rota aranıyor…" if f.get("route_pending") else "Rota bilinmiyor"
   left = f"{o['flag']} {esc(o['iata'])}" if o else "❓"
   right = f"{d['flag']} {esc(d['iata'])}" if d else "❓"
   return f"{left} → {right}"
@@ -794,13 +941,15 @@ def topbar_html(weather, now, counts, mode, status):
        f" · 💨 {weather['wind']} km/sa</span>") if weather else ""
   warn = f"<span class='chip'>⚠️ {esc(status)}</span>" if status not in ("ok", "") else ""
   trn = f" · ➡ {counts['trn']}" if counts["trn"] else ""
+  hid = (f"<span class='chip' title='Rotası bilinmeyen uçaklar listede ve haritada gösterilmiyor (⚙️ ile açılabilir)'>"
+         f"🙈 <b>{counts['hidden']}</b></span>") if counts.get("hidden") else ""
   return f"""
   <div class='topbar'>
     <div class='brand'>🧑‍✈️ Atlas'ın Uçak Gözlem Kulesi ✈️<small>Blixembosch bahçesinden Eindhoven gökyüzü · bugün hangi uçaklar geçiyor? 🔭</small></div>
     <div class='chips'>
       {warn}{w}
       <span class='chip'>✈ <b>{counts['total']}</b> uçak · ⬇ {counts['arr']} · ⬆ {counts['dep']}{trn} · 👀 {counts['vis']}</span>
-      <span class='chip' title='Tarama alanındaki toplam uçak (filtre öncesi)'>📡 <b>{counts['raw']}</b></span>
+      <span class='chip' title='Tarama alanındaki toplam uçak (filtre öncesi)'>📡 <b>{counts['raw']}</b></span>{hid}
       <span class='chip' title='Veri yenileme sıklığı (yaklaşan uçak varken hızlanır)'>🔄 <b>{counts['refresh']} sn</b></span>
       <span class='chip'>🕘 <b>{now.strftime('%H:%M:%S')}</b></span>
       <span class='chip'><span class='dot {dot}'></span><b>{label}</b></span>
@@ -1031,6 +1180,182 @@ def build_map(flights, sel_id, cov_km=NEAR_KM, view_km=35, view=None):
 
 
 # =============================================================================
+# YENİ SAYFALARIN HTML PARÇALARI  (giriş, terminal, gözlem defteri)
+# =============================================================================
+import re  # noqa: E402
+
+PAGES = ["🛰️ Radar", "🛫 Terminal", "📒 Gözlem Defteri"]
+
+
+def secret(name, default=""):
+  """secrets.toml / Streamlit Cloud 'Secrets' değeri; yoksa default."""
+  try:
+    v = st.secrets[name]
+  except Exception:
+    return default
+  return default if v is None else v
+
+
+def login_card_html():
+  return ("<div class='login-card'><div class='big'>🧑‍✈️</div>"
+          "<h1>Atlas'ın Uçak Gözlem Kulesi</h1>"
+          "<p>Devam etmek için şifreyi gir ✈️</p></div>")
+
+
+def login_ui(st_, state):
+  _, mid, _ = st_.columns([1, 1.15, 1])
+  with mid:
+    st_.markdown(login_card_html(), unsafe_allow_html=True)
+    if state.get("misconfigured"):
+      st_.error("Uygulama şifresi tanımlı değil. Streamlit → Settings → Secrets bölümüne "
+                "`APP_PASSWORD = \"...\"` ekleyin.")
+      return None
+    with st_.form("login_form", clear_on_submit=True, border=False):
+      pw = st_.text_input("Şifre", type="password", placeholder="Şifre", label_visibility="collapsed")
+      sent = st_.form_submit_button("Giriş yap", use_container_width=True)
+    if state.get("locked"):
+      st_.warning(f"Çok fazla yanlış deneme. {state['locked']} sn sonra tekrar deneyin.")
+    elif state.get("error"):
+      st_.error(state["error"])
+    return pw if sent else None
+
+
+def _cls(x):
+  return re.sub(r"[^A-Za-z0-9]", "", str(x or ""))
+
+
+def fids_logo_css(logos):
+  """Her havayolu logosu sayfada yalnızca bir kez (CSS sınıfı olarak) gömülür."""
+  rules = [f".alogo.k-{_cls(k)}{{background-image:url('{v}');}}" for k, v in logos.items() if v]
+  return f"<style>{''.join(rules)}</style>" if rules else ""
+
+
+def airline_key_for(row):
+  icao = (row.get("airline_icao") or "").upper()
+  key = ALIASES.get(icao, icao)
+  if not key:
+    num = (row.get("callsign") or "")[:3].upper()
+    key = ALIASES.get(num, num) if num.isalpha() else ""
+  return key or (row.get("airline_iata") or "")
+
+
+def fids_logo_cell(row, logos):
+  key = airline_key_for(row)
+  if logos.get(key):
+    return f"<span class='alogo k-{_cls(key)}'></span>"
+  _, bg, fg, _i = AIRLINES.get(key, (row.get("airline") or "", "#2b3558", "#ffffff", ""))
+  txt = esc((row.get("airline_iata") or key or "?")[:3])
+  return f"<span class='alogo txt' style='background:{bg};color:{fg}'>{txt}</span>"
+
+
+def fids_row_html(r, direction, logos, is_next=False):
+  cls = ["frow", "fgrid", "arr" if direction == "ARR" else "dep"]
+  if r["status_kind"] == "done":
+    cls.append("done")
+  if r["status"] in ("canceled", "canceleduncertain"):
+    cls.append("canc")
+  if is_next:
+    cls.append("next")
+  eff = f"<small>→ {esc(r['eff_hm'])}</small>" if r["eff_hm"] else ""
+  gate = ""
+  if direction == "DEP":
+    g = r.get("gate")
+    gate = f"<div class='c-gate{'' if g else ' na'}'>{esc(g) if g else '–'}</div>"
+  code = r.get("other_iata") or r.get("other_icao") or ""
+  dl = f"<div class='c-dl {esc(r['delay_kind'])}'>{esc(r['delay_txt']) or '–'}</div>"
+  return (f"<div class='{' '.join(cls)}'>"
+          f"<div class='c-time'><b>{esc(r['sched_hm'])}</b>{eff}</div>"
+          f"<div class='c-fl'>{fids_logo_cell(r, logos)}<div><b>{esc(r['number_disp'])}</b>"
+          f"<small>{esc(r.get('airline') or '')}</small></div></div>"
+          f"<div class='c-pl'><span class='fg'>{flag(r.get('other_cc'))}</span><div><b>{esc(r['place_disp'])}</b>"
+          f"<small>{esc(code)}</small></div></div>"
+          f"{gate}"
+          f"<div class='c-st'><span class='pill {esc(r['status_kind'])}'>{esc(r['status_label'])}</span></div>"
+          f"{dl}</div>")
+
+
+def fids_panel_html(direction, rows, total, logos, empty_msg):
+  arr = direction == "ARR"
+  title = "🛬 Varış" if arr else "🛫 Kalkış"
+  sub = "Arrivals" if arr else "Departures"
+  col1 = "Nereden" if arr else "Nereye"
+  gate_h = "" if arr else "<div style='text-align:center'>Kapı</div>"
+  cls = "arr" if arr else "dep"
+  head = (f"<div class='tphead {cls}'><div class='nm'>{title}<small>{sub}</small></div>"
+          f"<div class='ct'>{len(rows)} / {total} uçuş</div></div>")
+  if not rows:
+    return f"<div class='tpanel'>{head}<div class='tempty'>{empty_msg}</div></div>"
+  cols = (f"<div class='fgrid fcols {cls}'><div>Saat</div><div>Uçuş</div><div>{col1}</div>{gate_h}"
+          f"<div>Durum</div><div style='text-align:right'>Gecikme</div></div>")
+  nxt = next((i for i, r in enumerate(rows) if r["status_kind"] != "done"), None)
+  body = "".join(fids_row_html(r, direction, logos, i == nxt) for i, r in enumerate(rows))
+  return f"<div class='tpanel'>{head}{cols}{body}</div>"
+
+
+def term_head_html(now, mode, age_min):
+  if mode == "demo":
+    pill = "<span class='livepill demo'><i></i>Demo tarife</span>"
+  elif age_min is None:
+    pill = "<span class='livepill none'><i></i>Veri yok</span>"
+  elif age_min <= 180:
+    ago = "az önce" if age_min < 2 else f"{age_min} dk önce"
+    pill = f"<span class='livepill ok'><i></i>Güncel · {ago}</span>"
+  else:
+    h = age_min // 60
+    pill = f"<span class='livepill old'><i></i>Eski veri · {h} sa önce</span>"
+  return (f"<div class='term-head'><div><div class='tt'>Eindhoven Airport<span>EIN · EHEH</span></div>"
+          f"<div class='ts'>Varış ve kalkış bilgi ekranı · {now.strftime('%d.%m.%Y')}</div></div>"
+          f"<div class='tr'>{pill}<div class='clock'>{now.strftime('%H:%M')}</div></div></div>")
+
+
+def kpi_html(stats):
+  def top(x):
+    return f"<span>{esc(x[0])} · {x[1]}×</span>" if x else "<span>henüz yok</span>"
+  return ("<div class='kpis'>"
+          f"<div class='kpi'><small>Bugün</small><b>{stats['today']}</b><span>görülen uçak</span></div>"
+          f"<div class='kpi'><small>Son 7 gün</small><b>{stats['week']}</b><span>görülen uçak</span></div>"
+          f"<div class='kpi'><small>Toplam</small><b>{stats['total']}</b><span>{stats['days']} günde</span></div>"
+          f"<div class='kpi'><small>En çok görülen</small><b style='font-size:1.15rem;padding-top:8px'>"
+          f"{esc(stats['top_airline'][0]) if stats['top_airline'] else '—'}</b>{top(stats['top_type'])}</div>"
+          "</div>")
+
+
+def bars_html(per_day, days):
+  mx = max([per_day.get(d, 0) for d in days] + [1])
+  names = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"]
+  out = []
+  for d in days:
+    n = per_day.get(d, 0)
+    wd = names[datetime.strptime(d, "%Y-%m-%d").weekday()]
+    out.append(f"<div class='bar'><b>{n}</b><i style='height:{max(3, round(n / mx * 70))}px'></i><small>{wd}</small></div>")
+  return f"<div class='box'><h4>Son 7 gün</h4><div class='bars'>{''.join(out)}</div></div>"
+
+
+def sighting_html(r):
+  d = {"ARR": "<span class='badge arr'>GELİŞ ⬇</span>", "DEP": "<span class='badge dep'>KALKIŞ ⬆</span>",
+       "TRN": "<span class='badge trn'>GEÇİŞ ➡</span>"}.get(r.get("direction"), "")
+  route = " → ".join(x for x in (r.get("origin_iata"), r.get("dest_iata")) if x) or "rota ?"
+  when = (r.get("last_seen") or "")[:16].replace("T", " ")
+  extra = " · ".join(x for x in (r.get("type_name"), r.get("reg")) if x)
+  dist = f" · en yakın {r['min_dist_km']:.1f} km" if r.get("min_dist_km") is not None else ""
+  return (f"<div class='sight'>{d}<div class='sd'><b>{esc(r.get('callsign') or r.get('icao24'))}</b> "
+          f"· {esc(r.get('airline') or '')}<small>{esc(route)} · {esc(extra)}{dist}</small></div>"
+          f"<div class='tm'>{esc(when[5:])}</div></div>")
+
+
+def sync_text(sync, now_ts):
+  if sync["mode"] == "local":
+    return ("💾 Yerel kayıt (GitHub bağlı değil). Streamlit Cloud yeniden başladığında bu kayıtlar silinir; "
+            "kalıcı olması için secrets içine GITHUB_TOKEN ekleyin.")
+  if sync["error"]:
+    return f"⚠️ GitHub `{esc(sync['branch'])}` dalı: {esc(sync['error'])}"
+  if sync["last_ok"]:
+    mins = max(0, int((now_ts - sync["last_ok"]) // 60))
+    return f"☁️ GitHub `{esc(sync['branch'])}` dalına son yedek {mins} dk önce" + (" · bekleyen değişiklik var" if sync["dirty"] else "")
+  return f"☁️ GitHub `{esc(sync['branch'])}` dalı bağlı · henüz yedek alınmadı" + (" (bekleyen değişiklik var)" if sync["dirty"] else "")
+
+
+# =============================================================================
 # ANA UYGULAMA
 # =============================================================================
 
@@ -1041,21 +1366,49 @@ def select_flight(fid):
   st.session_state["_map_gen"] = st.session_state.get("_map_gen", 0) + 1
 
 
-def main():
-  st.set_page_config(page_title="Atlas'ın Uçak Gözlem Kulesi", page_icon="🧑‍✈️", layout="wide")
-  st.markdown(CSS, unsafe_allow_html=True)
+def keep(defaults):
+  """Sayfalar arası geçişte, ekrandan kalkan bileşenlerin değerini korur (Streamlit onları siler)."""
+  ss = st.session_state
+  for k, d in defaults.items():
+    if k not in ss:
+      ss[k] = ss.get("_p_" + k, d)
 
-  if folium is None or st_folium is None:
-    st.error("Eksik paket: `pip install folium streamlit-folium`")
-    st.stop()
+
+def remember(keys):
+  ss = st.session_state
+  for k in keys:
+    if k in ss:
+      ss["_p_" + k] = ss[k]
+
+
+def apply_home_override():
+  """Depo herkese açıksa ev konumunu kodda değil secrets içinde tutabilirsin."""
+  global HOME_LAT, HOME_LON
+  try:
+    lat, lon = float(secret("HOME_LAT", "")), float(secret("HOME_LON", ""))
+  except (TypeError, ValueError):
+    return
+  if -90 <= lat <= 90 and -180 <= lon <= 180:
+    HOME_LAT, HOME_LON = lat, lon
+
+
+@st.cache_resource(show_spinner=False)
+def get_db():
+  """Tek veritabanı nesnesi (tüm oturumlar için). İlk çağrıda `data` dalından çeker."""
+  return radar_db.open_db(lambda k, d="": str(secret(k, d)))
+
+
+def page_radar(db, store, demo, refresh_s_box):
+  ss = st.session_state
+  keep({"f_over": False, "f_cov": list(COVERAGE)[0], "f_visk": VISIBLE_KM, "f_visa": VISIBLE_ALT_FT,
+        "f_ovk": OVERFLIGHT_KM, "f_unk": False, "f_view": "Hepsi", "f_q": ""})
   auth = "auth" if get_bearer() else "anon"
-  active = st.session_state.get("_active", False)
+  active = ss.get("_active", False)
   refresh_s = (REFRESH_ACTIVE if active else REFRESH_IDLE)[auth]
-  if st_autorefresh is not None:
-    st_autorefresh(interval=refresh_s * 1000, key="radar_refresh")
+  refresh_s_box.append(refresh_s)
 
-  st.session_state.setdefault("sel", None)
-  st.session_state.setdefault("_map_gen", 0)
+  ss.setdefault("sel", None)
+  ss.setdefault("_map_gen", 0)
 
   # Yerleşim iskeleti (kod sırasından bağımsız, ekrandaki sırayı belirler)
   c_top = st.container()
@@ -1068,34 +1421,41 @@ def main():
    with st.container(key="toolbar"):
     f1, f2, f3, f4, f5 = st.columns([2.6, 3.2, 2.1, 1.7, 0.6], vertical_alignment="center")
     with f3:
-      overflights = st.toggle("Üstümüzden geçenler", value=False,
+      overflights = st.toggle("Üstümüzden geçenler", key="f_over",
                               help="Yüksekte (10.000 ft üstü) evimizin yakınından geçen uçaklar; haritada mor.")
     with f4:
-      cov_label = st.selectbox("Kapsama", list(COVERAGE), index=0, label_visibility="collapsed",
+      if ss["f_cov"] not in COVERAGE:
+        ss["f_cov"] = list(COVERAGE)[0]
+      cov_label = st.selectbox("Kapsama", list(COVERAGE), key="f_cov", label_visibility="collapsed",
                                help="Tarama alanı. Geniş seçeneklerde Eindhoven'a inmek üzere alçalan "
                                     "uçaklar uzaktan görünür.")
     with f5:
       with st.popover("⚙️"):
-        vis_km = st.slider("Görüş yarıçapı (km)", 2.0, 10.0, VISIBLE_KM, 0.5,
+        vis_km = st.slider("Görüş yarıçapı (km)", 2.0, 10.0, step=0.5, key="f_visk",
                            help="Bu mesafedeki uçaklar 'bahçeden görünür' sayılır.")
-        vis_alt = st.slider("Görünür irtifa (ft)", 2000, 10000, VISIBLE_ALT_FT, 500)
-        ovf_km = st.slider("Geçiş mesafesi (km)", 5, 80, OVERFLIGHT_KM, 5,
+        vis_alt = st.slider("Görünür irtifa (ft)", 2000, 10000, step=500, key="f_visa")
+        ovf_km = st.slider("Geçiş mesafesi (km)", 5, 80, step=5, key="f_ovk",
                            help="'Üstümüzden geçenler' açıkken evden bu mesafedeki uçaklar gösterilir. "
                                 "Küçük değer = sadece tam tepemizden geçenler.")
-        demo = st.toggle("Demo modu", value=False, help="Gece uçak yokken arayüzü denemek için.")
+        show_unknown = st.toggle("Rotası bilinmeyenleri de göster", key="f_unk",
+                                 help="Kapalıyken rotası (nereden–nereye) bulunamayan uçaklar listede ve "
+                                      "haritada gösterilmez.")
     with f1:
       views = ["Hepsi", "Varış", "Kalkış"] + (["Geçiş"] if overflights else [])
-      view = st.radio("Filtre", views, horizontal=True, label_visibility="collapsed")
+      if ss["f_view"] not in views:
+        ss["f_view"] = "Hepsi"
+      view = st.radio("Filtre", views, horizontal=True, key="f_view", label_visibility="collapsed")
     with f2:
-      query = st.text_input("Ara", placeholder="🔍 Ara: HV6710, Transavia, Athens, 737, PH-HXK...",
+      query = st.text_input("Ara", key="f_q", placeholder="🔍 Ara: HV6710, Transavia, Athens, 737, PH-HXK...",
                             label_visibility="collapsed")
+  remember(["f_over", "f_cov", "f_visk", "f_visa", "f_ovk", "f_unk", "f_view", "f_q"])
   CFG["visible_km"], CFG["visible_alt"], CFG["overflight_km"] = vis_km, vis_alt, ovf_km
   cov_km, view_km = COVERAGE[cov_label]
 
   # --- Veri ---
-  store = get_store()
   weather = fetch_weather()
   wind_dir = weather.get("wind_dir") if weather else None
+  bstats = {"hidden_unknown": 0}
   if demo:
     all_flights = attach_logos(demo_flights(overflights), store)
     status, fetched, mode, raw_n = "ok", time.time(), "demo", len(all_flights)
@@ -1104,13 +1464,35 @@ def main():
     fetch_km = max(cov_km, ovf_km + 12) if overflights else cov_km  # ev havalimanından ~9 km uzakta
     states, status, fetched = fetch_states(get_bearer(), fetch_km)
     raw_n = len(states)
-    all_flights = attach_logos(build_flights(states, store, overflights, cov_km), store)
+    all_flights = attach_logos(
+        build_flights(states, store, overflights, cov_km, show_unknown, bstats), store)
     mode = "live" if status == "ok" else "err"
     runway = infer_runway(states, wind_dir)
   updated = datetime.fromtimestamp(fetched, TZ).strftime("%H:%M:%S")
 
+  # Bahçeden görünen uçakları Gözlem Defteri'ne yaz (demo hariç)
+  if not demo and status == "ok":
+    try:
+      day = datetime.now(TZ).strftime("%Y-%m-%d")
+      items = []
+      for f in all_flights:
+        if f["visible"] and f.get("route_known"):
+          o, d = f["origin"], f["dest"]
+          items.append({
+              "day": day, "icao24": f["id"], "callsign": f["callsign"], "airline": f["airline"],
+              "airline_key": f["airline_key"], "airline_iata": f["airline_iata"],
+              "type_code": f["type_code"], "type_name": f["type_name"], "reg": f["reg"],
+              "direction": f["dir"], "origin_iata": o["iata"] if o else None,
+              "origin_city": o["city"] if o else None, "dest_iata": d["iata"] if d else None,
+              "dest_city": d["city"] if d else None, "dist_km": round(f["dist_home"], 2),
+              "alt_ft": f["alt_ft"]})
+      if items:
+        db.record_sightings(items, datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S"))
+    except Exception:  # defter hatası radarı asla durdurmasın
+      pass
+
   # Yaklaşan (≤25 km, alçak) uçak varsa bir sonraki turda daha sık yenile
-  st.session_state["_active"] = any(
+  ss["_active"] = any(
       f["approaching"] and f["dist_home"] <= 25 and f["alt_ft"] <= MAX_SHOW_ALT_FT
       for f in all_flights)
 
@@ -1146,14 +1528,15 @@ def main():
       "trn": sum(f["dir"] == "TRN" for f in flights),
       "vis": sum(f["visible"] for f in flights),
       "raw": raw_n,
+      "hidden": bstats["hidden_unknown"],
       "refresh": refresh_s,
   }
 
   # --- Seçili uçağı belirle ---
   ids = [f["id"] for f in flights]
-  if st.session_state["sel"] not in ids:
+  if ss["sel"] not in ids:
     vis_first = [f for f in flights if f["visible"]] or flights
-    st.session_state["sel"] = vis_first[0]["id"] if vis_first else None
+    ss["sel"] = vis_first[0]["id"] if vis_first else None
 
   # --- Üst bar + sıradaki uçak ---
   with c_top:
@@ -1170,19 +1553,19 @@ def main():
   with c_main:
     col_map, col_panel = st.columns([2.2, 1])
     with col_map:
-      m = build_map(flights, st.session_state["sel"], cov_km, view_km)
+      m = build_map(flights, ss["sel"], cov_km, view_km)
       out = st_folium(m, height=MAP_HEIGHT, use_container_width=True,
                       returned_objects=["last_object_clicked_tooltip"],
-                      key=f"radar_map_{st.session_state['_map_gen']}")
+                      key=f"radar_map_{ss['_map_gen']}")
       clicked = ((out or {}).get("last_object_clicked_tooltip") or "").strip()
       hit_f = next((f for f in flights if f["label"] == clicked), None) if clicked else None
       if hit_f:
-        st.session_state["sel"] = hit_f["id"]
-        st.session_state["_map_gen"] += 1  # eski tıklamayı unut, haritayı seçili renkle yeniden çiz
+        ss["sel"] = hit_f["id"]
+        ss["_map_gen"] += 1  # eski tıklamayı unut, haritayı seçili renkle yeniden çiz
         st.rerun()
       st.markdown(legend_html(overflights), unsafe_allow_html=True)
     with col_panel:
-      selected = next((f for f in flights if f["id"] == st.session_state["sel"]), None)
+      selected = next((f for f in flights if f["id"] == ss["sel"]), None)
       if selected and not selected["photo"] and not demo:  # fotoğraf yoksa yedek kaynak
         ph = lookup_photo(selected["id"], store)
         if ph:
@@ -1198,17 +1581,180 @@ def main():
         cols = st.columns(per_row)
         for col, f in zip(cols, shown[i:i + per_row]):
           with col:
-            st.markdown(card_html(f, f["id"] == st.session_state["sel"]), unsafe_allow_html=True)
+            st.markdown(card_html(f, f["id"] == ss["sel"]), unsafe_allow_html=True)
             st.button("İncele", key=f"btn_{f['id']}", on_click=select_flight,
                       args=(f["id"],), use_container_width=True)
     else:
-      st.info("Şu an listelenecek uçak yok. Arayüzü denemek için ⚙️ menüsünden “Demo modu”nu aç.")
+      hid = counts["hidden"]
+      extra = (f" Rotası bilinmediği için {hid} uçak gizlendi (⚙️ menüsünden gösterebilirsin)." if hid else "")
+      st.info("Şu an listelenecek uçak yok." + extra + " Arayüzü denemek için üstteki “Demo modu”nu aç.")
 
     st.markdown(
         "<div class='foot'>Veri: OpenSky Network · adsbdb · Open-Meteo · "
         "Harita: © OpenStreetMap katkıcıları, © CARTO · Rota/tür bilgisi bazı uçaklarda eksik olabilir.</div>",
         unsafe_allow_html=True,
     )
+
+
+def _more_rows():
+  st.session_state["fids_n"] = min(60, st.session_state.get("fids_n", 20) + 10)
+
+
+def page_terminal(db, store, demo, refresh_s_box):
+  ss = st.session_state
+  refresh_s_box.append(60)
+  keep({"fids_q": "", "fids_n": 20})
+  now = fids.now_local()
+  key = str(secret("AERODATABOX_KEY", "")).strip()
+  host = str(secret("AERODATABOX_HOST", "")).strip() or fids.ADB_HOST
+  try:
+    monthly = int(float(secret("ADB_MONTHLY_UNITS", fids.DEFAULT_MONTHLY_UNITS)))
+  except (TypeError, ValueError):
+    monthly = fids.DEFAULT_MONTHLY_UNITS
+
+  res = {"error": "", "reason": ""}
+  if not demo and key:
+    res = fids.refresh(db, key, now, host=host, monthly_units=monthly)
+    if res.get("fetched"):
+      db.maybe_push()
+
+  q1, q2 = st.columns([3, 1.2], vertical_alignment="center")
+  with q1:
+    query = st.text_input("Ara", key="fids_q", label_visibility="collapsed",
+                          placeholder="🔍 Uçuş no, havayolu, şehir, kapı: HV5101, Ryanair, Malaga, B3...")
+  limit = int(ss.get("fids_n", 20))
+  remember(["fids_q", "fids_n"])
+
+  if demo:
+    mode, age = "demo", None
+    dep, dep_total = fids.select_demo("DEP", now, limit, query)
+    arr, arr_total = fids.select_demo("ARR", now, limit, query)
+  else:
+    mode, age = "live", fids.data_age_min(db, now)
+    dep, dep_total = fids.select_board(db, "DEP", now, limit, query=query)
+    arr, arr_total = fids.select_board(db, "ARR", now, limit, query=query)
+
+  # Logolar (her havayolu bir kez)
+  pairs = sorted({(airline_key_for(r), r.get("airline_iata") or "") for r in dep + arr} - {("", "")})
+  with ThreadPoolExecutor(ENRICH_WORKERS) as pool:
+    got = list(pool.map(lambda kp: fetch_logo(kp[0], kp[1], store), pairs)) if pairs else []
+  logos = {kp[0]: v for kp, v in zip(pairs, got)}
+
+  st.markdown(fids_logo_css(logos) + term_head_html(now, mode, age), unsafe_allow_html=True)
+
+  if not demo and not key and not (dep or arr):
+    empty = ("<div class='big'>🔑</div>Tarife verisi için ücretsiz bir AeroDataBox anahtarı gerekiyor.<br>"
+             "Streamlit Secrets içine <b>AERODATABOX_KEY</b> ekleyin (RapidAPI → AeroDataBox → Basic plan).<br>"
+             "Arayüzü denemek için üstteki <b>Demo modu</b>nu açabilirsiniz.")
+  elif not demo and query.strip():
+    empty = "<div class='big'>🔍</div>Aramanızla eşleşen uçuş yok."
+  elif not demo:
+    empty = ("<div class='big'>🛩️</div>Önümüzdeki saatler için kayıtlı uçuş yok."
+             + (f"<br><small>{esc(res['error'])}</small>" if res.get("error") else ""))
+  else:
+    empty = "<div class='big'>🔍</div>Aramanızla eşleşen uçuş yok."
+
+  cA, cD = st.columns(2)
+  with cA:
+    st.markdown(fids_panel_html("ARR", arr, arr_total, logos, empty), unsafe_allow_html=True)
+  with cD:
+    st.markdown(fids_panel_html("DEP", dep, dep_total, logos, empty), unsafe_allow_html=True)
+
+  if max(arr_total, dep_total) > limit and limit < 60:
+    b1, b2, b3 = st.columns([1, 1, 1])
+    with b2:
+      st.button("Daha fazla göster (+10)", on_click=_more_rows, use_container_width=True, key="fids_more")
+
+  if res.get("error") and not demo:
+    st.markdown(f"<div class='tnote warn'>⚠️ Tarife güncellenemedi: {esc(res['error'])} "
+                "· Son kayıtlı veri gösteriliyor.</div>", unsafe_allow_html=True)
+  if demo:
+    foot = "Demo tarifesi örnek verilerdir; gerçek uçuşları göstermez."
+  else:
+    bs = fids.budget_state(db, now, monthly)
+    foot = (f"Tarife: AeroDataBox · bu ay {bs['used']}/{bs['cap']} kota birimi kullanıldı · "
+            f"yaklaşık {bs['interval_h']:.1f} saatte bir yenilenir")
+  st.markdown(f"<div class='foot'>{esc(foot)} · Saatler Hollanda saatidir. Gecikme = planlanan ile "
+              "tahmini/gerçekleşen saat farkı.</div>", unsafe_allow_html=True)
+
+
+def _backup_now():
+  st.session_state["_backup_req"] = True
+
+
+def page_diary(db, store, demo, refresh_s_box):
+  ss = st.session_state
+  refresh_s_box.append(120)
+  now = datetime.now(TZ)
+  today = now.strftime("%Y-%m-%d")
+  days = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
+  stats = db.sighting_stats(today, days[0])
+  st.markdown("<div class='term-head'><div><div class='tt'>📒 Gözlem Defteri</div>"
+              "<div class='ts'>Bahçeden görülen uçaklar otomatik kaydedilir</div></div></div>",
+              unsafe_allow_html=True)
+  st.markdown(kpi_html(stats), unsafe_allow_html=True)
+  cL, cR = st.columns([1.5, 1])
+  with cL:
+    recent = db.recent_sightings(30)
+    if recent:
+      st.markdown("".join(sighting_html(r) for r in recent), unsafe_allow_html=True)
+    else:
+      st.markdown("<div class='box'><div class='tempty'><div class='big'>🔭</div>"
+                  "Henüz kayıt yok. Bahçeden görünür bir uçak geçince burada listelenir.</div></div>",
+                  unsafe_allow_html=True)
+  with cR:
+    st.markdown(bars_html(stats["per_day"], days), unsafe_allow_html=True)
+    sync = db.sync_status()
+    st.markdown(f"<div class='box'><h4>Veritabanı</h4><div style='font-size:.82rem;color:#cdd5ea'>"
+                f"{sync_text(sync, time.time())}</div></div>", unsafe_allow_html=True)
+    if sync["mode"] == "github":
+      st.button("☁️ Şimdi yedekle", on_click=_backup_now, use_container_width=True, key="backup_btn")
+      if ss.pop("_backup_req", False):
+        db.maybe_push(force=True, wait=True)
+        st.rerun()
+
+
+def main():
+  st.set_page_config(page_title="Atlas'ın Uçak Gözlem Kulesi", page_icon="🧑‍✈️", layout="wide")
+  st.markdown(CSS, unsafe_allow_html=True)
+
+  # 1) Şifre kapısı: giriş yapılmadan hiçbir veri/API çağrısı ve otomatik yenileme başlamaz
+  if not radar_auth.gate(st, secret, login_ui=login_ui):
+    st.stop()
+
+  if folium is None or st_folium is None:
+    st.error("Eksik paket: `pip install folium streamlit-folium`")
+    st.stop()
+  apply_home_override()
+  db = get_db()
+  db.maybe_push()
+  store = get_store()
+
+  # 2) Gezinme
+  keep({"page": PAGES[0], "demo": False})
+  with st.container(key="nav"):
+    n1, n2, n3 = st.columns([5, 1.5, 1], vertical_alignment="center")
+    with n1:
+      if st.session_state["page"] not in PAGES:
+        st.session_state["page"] = PAGES[0]
+      page = st.radio("Sayfa", PAGES, horizontal=True, key="page", label_visibility="collapsed")
+    with n2:
+      demo = st.toggle("Demo modu", key="demo", help="Gece uçak yokken arayüzü denemek için örnek veri.")
+    with n3:
+      if st.button("Çıkış", use_container_width=True, key="logout_btn"):
+        radar_auth.logout(st)
+        st.rerun()
+  remember(["page", "demo"])
+
+  # 3) Sayfa
+  box = []
+  fn = {PAGES[0]: page_radar, PAGES[1]: page_terminal, PAGES[2]: page_diary}[page]
+  fn(db, store, demo, box)
+
+  # 4) Otomatik yenileme (sayfaya göre; en sonda ki sayfa hatası yenilemeyi engellemesin diye değil,
+  #    sayfanın kendi aralığı belli olduktan sonra kurulur)
+  if st_autorefresh is not None and box:
+    st_autorefresh(interval=box[0] * 1000, key=f"refresh_{PAGES.index(page)}")
 
 
 if __name__ == "__main__":

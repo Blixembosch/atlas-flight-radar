@@ -3,4 +3,3 @@ requests
 folium
 streamlit-folium
 streamlit-autorefresh
-pandas
