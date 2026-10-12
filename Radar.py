@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.4)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.5)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -1253,6 +1253,31 @@ def plane_icon(f, selected):
                         class_name="plane-icon")
 
 
+TIP_CSS = """<style>
+.leaflet-tooltip.plane-tip{background:rgba(13,20,43,.94);color:#fff;border:1px solid rgba(255,255,255,.16);
+  border-radius:999px;padding:5px 12px 5px 11px;box-shadow:0 6px 18px rgba(0,0,0,.45);
+  font:800 12.5px/1 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:.05em;white-space:nowrap;}
+.leaflet-tooltip.plane-tip:after{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;
+  margin-left:8px;vertical-align:1px;background:#38bdf8;box-shadow:0 0 8px currentColor;color:#38bdf8;}
+.leaflet-tooltip.plane-tip.dep:after{background:#fb923c;color:#fb923c;}
+.leaflet-tooltip.plane-tip.trn:after{background:#a78bfa;color:#a78bfa;}
+.leaflet-tooltip.plane-tip.sel{border-color:#facc15;background:rgba(40,32,6,.95);color:#fde68a;}
+.leaflet-tooltip.plane-tip.sel:after{background:#facc15;color:#facc15;}
+.leaflet-tooltip-top.plane-tip:before{border-top-color:rgba(13,20,43,.94);}
+.leaflet-tooltip-bottom.plane-tip:before{border-bottom-color:rgba(13,20,43,.94);}
+.leaflet-tooltip-left.plane-tip:before{border-left-color:rgba(13,20,43,.94);}
+.leaflet-tooltip-right.plane-tip:before{border-right-color:rgba(13,20,43,.94);}
+.leaflet-tooltip-top.plane-tip.sel:before{border-top-color:rgba(40,32,6,.95);}
+</style>"""
+
+
+def plane_tip(f, selected):
+  """Uçak etiketi: metin çağrı kodu kalır (tıklama eşleştirmesi buna bağlı), görünüm CSS ile."""
+  cls = "plane-tip " + ("sel" if selected else {"ARR": "arr", "DEP": "dep", "TRN": "trn"}.get(f["dir"], "arr"))
+  return folium.Tooltip(f["label"], sticky=False, direction="top", offset=(0, -20),
+                        permanent=bool(selected), class_name=cls)
+
+
 def legend_html(overflights):
   def pl(color, extra=""):
     return (f"<svg viewBox='0 0 24 24' width='20' height='20' style='{extra}'>"
@@ -1304,6 +1329,7 @@ def build_map(flights, sel_id, cov_km=NEAR_KM, view_km=35, view=None):
   m.get_root().html.add_child(folium.Element(
       "<style>.leaflet-control-scale-line:nth-child(2){display:none!important}"
       ".leaflet-control-scale-line{background:rgba(255,255,255,.85)!important}</style>"))
+  m.get_root().html.add_child(folium.Element(TIP_CSS))
   folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
   folium.TileLayer("CartoDB dark_matter", name="Koyu harita", show=False).add_to(m)
 
@@ -1342,7 +1368,7 @@ def build_map(flights, sel_id, cov_km=NEAR_KM, view_km=35, view=None):
   entries = []
   for f in flights:
     mk = folium.Marker([f["lat"], f["lon"]], icon=plane_icon(f, f["id"] == sel_id),
-                       tooltip=folium.Tooltip(f["label"]))
+                       tooltip=plane_tip(f, f["id"] == sel_id))
     mk.add_to(m)
     if f["speed"] > 60:
       age = min(max(0.0, now - f["tpos"]), MOTION_MAX_AGE_S) if f.get("tpos") else 0.0

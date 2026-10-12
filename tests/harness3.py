@@ -123,7 +123,10 @@ folium = types.ModuleType("folium")
 folium.Map = Map
 for nm in ["TileLayer", "Circle", "CircleMarker", "Polygon", "Marker", "LayerControl"]:
     setattr(folium, nm, (lambda nm: lambda *a, **k: Rec(nm, *a, **k))(nm))
-folium.Tooltip = lambda t: t
+class Tip(str):
+    def __new__(cls, t, **k):
+        o = str.__new__(cls, t); o.k = k; return o
+folium.Tooltip = Tip
 folium.DivIcon = lambda html, **k: types.SimpleNamespace(html=html, **k)
 folium.Element = lambda t: t
 class MacroElement(Rec):

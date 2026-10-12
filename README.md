@@ -1,4 +1,4 @@
-# ✈️ Atlas'ın Uçak Gözlem Kulesi · v0.3.4
+# ✈️ Atlas'ın Uçak Gözlem Kulesi · v0.3.5
 
 Eindhoven Havalimanı (EHEH) kuzey koridorunu ve Blixembosch bahçesinin üzerinden geçen uçakları
 canlı gösteren, koyu temalı Streamlit panosu.

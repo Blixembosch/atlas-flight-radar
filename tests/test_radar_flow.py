@@ -139,5 +139,17 @@ n0 = fake.reruns; run(); check("tek çalıştırmada rerun fırtınası yok", fa
 Net.states = [row("z","TRA9",52.3,5.4,30000,800,0,0)]; run(); run()
 check("yaklaşan yokken yavaş yenileme (60 sn)", fake.refresh == 60000, fake.refresh)
 
+# 9) uçak etiketi stili
+Net.states = saved
+run(); W()
+mk_ = SF.calls[-1][0].markers()
+tips = {m.k["tooltip"]: m.k["tooltip"].k for m in mk_}
+check("etiket metni çağrı kodu kaldı (tıklama eşleştirmesi bozulmadı)", all(isinstance(k, str) and k for k in tips))
+check("etiketlerde plane-tip sınıfı", all("plane-tip" in v["class_name"] for v in tips.values()))
+check("seçili uçağın etiketi sarı ve kalıcı", sum(1 for v in tips.values() if "sel" in v["class_name"] and v["permanent"]) == 1)
+check("diğer etiketler hover'da (kalıcı değil)", all(not v["permanent"] for v in tips.values() if "sel" not in v["class_name"]))
+check("yön renk sınıfı (arr/dep)", any(" arr" in v["class_name"] for v in tips.values()) or any(" dep" in v["class_name"] for v in tips.values()))
+check("etiket CSS'i haritaya eklendi", any("plane-tip" in str(x) for x in SF.calls[-1][0].get_root().html.items))
+
 print("\nSONUÇ:", "TÜM TESTLER GEÇTİ" if ok else "HATA VAR")
 sys.exit(0 if ok else 1)
