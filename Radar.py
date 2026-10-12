@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.2)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.3)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -581,10 +581,44 @@ def _from_adsblol(radius_km):
     return None, "adsb.lol yanıtı okunamadı"
 
 
-@st.cache_data(ttl=FETCH_TTL, show_spinner=False)
-def fetch_states(bearer, radius_km=NEAR_KM):
-  """(states, durum_mesajı, epoch). Önce OpenSky, ulaşılamazsa ücretsiz adsb.lol.
-  Hata olsa da uygulama çökmez; kullanılan kaynak _SRC['last_source'] içinde tutulur."""
+_TCACHE = {}          # (bearer, yarıçap) -> (zaman, sonuç)   (tüm oturumlar için ortak)
+STALE_OK_S = 120      # sayfa geçişinde bu kadar eski veri anında gösterilir, arka planda tazelenir
+
+
+def fetch_states(bearer, radius_km=NEAR_KM, allow_stale=False):
+  """(states, durum_mesajı, epoch). FETCH_TTL sn önbellek. allow_stale=True iken (sayfa geçişi)
+  eski ama başarılı veri beklemeden verilir, tazesi arka planda çekilir."""
+  key = (bearer, radius_km)
+  hit = _TCACHE.get(key)
+  now = time.time()
+  if hit:
+    age = now - hit[0]
+    if age < FETCH_TTL:
+      return hit[1]
+    if allow_stale and age < STALE_OK_S and hit[1][1] == "ok":
+      with _BG_LOCK:
+        busy = ("traffic", key) in _BG["logo"]
+        _BG["logo"].add(("traffic", key))
+
+      def work():
+        try:
+          _TCACHE[key] = (time.time(), _fetch_states_live(bearer, radius_km))
+        except Exception:
+          pass
+        finally:
+          with _BG_LOCK:
+            _BG["logo"].discard(("traffic", key))
+      if not busy:
+        _spawn(work)
+      return hit[1]
+  res = _fetch_states_live(bearer, radius_km)
+  _TCACHE[key] = (time.time(), res)
+  return res
+
+
+def _fetch_states_live(bearer, radius_km=NEAR_KM):
+  """Önce OpenSky, ulaşılamazsa ücretsiz adsb.lol. Hata olsa da uygulama çökmez;
+  kullanılan kaynak _SRC['last_source'] içinde tutulur."""
   now = time.time()
   pref = str(secret("TRAFFIC_SOURCE", "auto")).strip().lower()
   if pref == "adsblol":
@@ -949,11 +983,12 @@ def peek_logo(key, iata, store):
 
 
 def attach_logos(flights, store):
-  """Her havayolu için logoyu (yerel dosya ya da internetten) bir kez getirir."""
-  keys = sorted({(f["airline_key"], f["airline_iata"]) for f in flights
-                 if f["airline_key"] or f["airline_iata"]})
-  with ThreadPoolExecutor(ENRICH_WORKERS) as pool:
-    logos = dict(zip(keys, pool.map(lambda k: fetch_logo(k[0], k[1], store), keys)))
+  """Logoyu beklemeden bağlar: önbellekte olan hemen gelir, olmayan arka planda indirilir
+  (o ana kadar renkli harf rozeti görünür)."""
+  logos = {}
+  for k in sorted({(f["airline_key"], f["airline_iata"]) for f in flights
+                   if f["airline_key"] or f["airline_iata"]}):
+    logos[k] = peek_logo(k[0], k[1], store)[0]
   for f in flights:
     f["logo"] = logos.get((f["airline_key"], f["airline_iata"]), "")
   return flights
@@ -1550,6 +1585,9 @@ def page_radar(db, store, demo, refresh_s_box):
   ss.setdefault("sel", None)
   ss.setdefault("_map_gen", 0)
 
+  tm = {}
+  t_page = time.time()
+
   # Yerleşim iskeleti (kod sırasından bağımsız, ekrandaki sırayı belirler)
   c_top = st.container()
   c_next = st.container()
@@ -1602,10 +1640,15 @@ def page_radar(db, store, demo, refresh_s_box):
     runway = {"rwy": "21", "source": "demo", "n": 0}
   else:
     fetch_km = max(cov_km, ovf_km + 12) if overflights else cov_km  # ev havalimanından ~9 km uzakta
-    states, status, fetched = fetch_states(get_bearer(), fetch_km)
+    t1 = time.time()
+    states, status, fetched = fetch_states(get_bearer(), fetch_km,
+                                           allow_stale=bool(ss.get("_switched")))
+    tm["veri"] = time.time() - t1
     raw_n = len(states)
+    t1 = time.time()
     all_flights = attach_logos(
         build_flights(states, store, overflights, cov_km, show_unknown, bstats), store)
+    tm["uçaklar"] = time.time() - t1
     mode = "live" if status == "ok" else "err"
     runway = infer_runway(states, wind_dir)
   updated = datetime.fromtimestamp(fetched, TZ).strftime("%H:%M:%S")
@@ -1693,7 +1736,9 @@ def page_radar(db, store, demo, refresh_s_box):
   with c_main:
     col_map, col_panel = st.columns([2.2, 1])
     with col_map:
+      t1 = time.time()
       m = build_map(flights, ss["sel"], cov_km, view_km)
+      tm["harita"] = time.time() - t1
       out = st_folium(m, height=MAP_HEIGHT, use_container_width=True,
                       returned_objects=["last_object_clicked_tooltip"],
                       key=f"radar_map_{ss['_map_gen']}")
@@ -1731,9 +1776,12 @@ def page_radar(db, store, demo, refresh_s_box):
 
     st.markdown(
         f"<div class='foot'>Uçak konumu: {esc(_SRC['last_source'] or 'OpenSky Network / adsb.lol')} · adsbdb · Open-Meteo · "
-        "Harita: © OpenStreetMap katkıcıları, © CARTO · Rota/tür bilgisi bazı uçaklarda eksik olabilir.</div>",
+        "Harita: © OpenStreetMap katkıcıları, © CARTO · Rota/tür bilgisi bazı uçaklarda eksik olabilir."
+        f" · ⏱ {' · '.join(f'{k} {v:.1f}' for k, v in tm.items())} · toplam {time.time() - t_page:.1f} sn</div>",
         unsafe_allow_html=True,
     )
+  if any(k and k[0] == "logo" for k in list(_BG["logo"])):   # logolar iniyor: kısa süre sonra yenile
+    refresh_s_box[-1] = min(refresh_s_box[-1], 5)
 
 
 def _more_rows():
@@ -1901,6 +1949,8 @@ def main():
   remember(["page", "demo"])
 
   # 3) Sayfa
+  st.session_state["_switched"] = st.session_state.get("_last_page") != page
+  st.session_state["_last_page"] = page
   box = []
   fn = {PAGES[0]: page_radar, PAGES[1]: page_terminal, PAGES[2]: page_diary}[page]
   fn(db, store, demo, box)
