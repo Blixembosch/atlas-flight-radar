@@ -154,19 +154,26 @@ class Resp:
 class Net:
     states = []; routes = {}; route_err = set(); fail_opensky = False
     aircraft = {}; adb_status = 200; adb_json = None; gh = None
-    calls = {"opensky": 0, "adb": 0, "github": 0, "adsbdb": 0}
+    os_exc = None; adsb = None
+    calls = {"opensky": 0, "adb": 0, "github": 0, "adsbdb": 0, "adsblol": 0}
     log = []     # (url) tüm istekler
     @classmethod
     def reset(cls):
         cls.states = []; cls.routes = {}; cls.route_err = set(); cls.fail_opensky = False
         cls.aircraft = {}; cls.adb_status = 200; cls.adb_json = None; cls.gh = None
-        cls.calls = {"opensky": 0, "adb": 0, "github": 0, "adsbdb": 0}; cls.log = []
+        cls.os_exc = None; cls.adsb = None
+        cls.calls = {"opensky": 0, "adb": 0, "github": 0, "adsbdb": 0, "adsblol": 0}; cls.log = []
 
 def rget(url, params=None, headers=None, timeout=None, **kw):
     Net.log.append(url)
     if "opensky-network.org/api/states" in url:
         Net.calls["opensky"] += 1
+        if Net.os_exc: raise Net.os_exc
         return Resp({"states": Net.states}, 500 if Net.fail_opensky else 200)
+    if "api.adsb.lol" in url:
+        Net.calls["adsblol"] += 1
+        if Net.adsb is None: return Resp(None, 503)
+        return Resp(Net.adsb)
     if "aerodatabox" in url:
         Net.calls["adb"] += 1
         return Resp(Net.adb_json if Net.adb_json is not None else {}, Net.adb_status)
@@ -227,10 +234,12 @@ def press(key):
     fake.pressed = {key}
     return run()
 
+class Timeout(Exception): pass
+
 def reset_app(secrets=None):
     """Yeni tarayıcı oturumu + yeni sunucu durumu."""
     import shutil
-    Net.reset()
+    Net.reset(); radar._SRC.update(os_down_until=0.0, last_source="")
     for f in os.listdir(DBDIR): 
         p = os.path.join(DBDIR, f)
         if os.path.isfile(p): os.remove(p)

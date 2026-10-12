@@ -1,4 +1,4 @@
-# ✈️ Atlas'ın Uçak Gözlem Kulesi · v0.3
+# ✈️ Atlas'ın Uçak Gözlem Kulesi · v0.3.1
 
 Eindhoven Havalimanı (EHEH) kuzey koridorunu ve Blixembosch bahçesinin üzerinden geçen uçakları
 canlı gösteren, koyu temalı Streamlit panosu.
@@ -59,6 +59,7 @@ GitHub token: Settings → Developer settings → **Fine-grained token** → yal
 | `AERODATABOX_KEY`, `AERODATABOX_HOST`, `ADB_MONTHLY_UNITS` | Terminal tarifesi ve kota |
 | `GITHUB_TOKEN`, `GITHUB_REPO`, `DATA_BRANCH`, `DB_PUSH_MIN` | Veritabanı yedeği |
 | `opensky_client_id`, `opensky_client_secret` | OpenSky hesabı (önerilir) |
+| `TRAFFIC_SOURCE` | `auto` (varsayılan: OpenSky, ulaşılamazsa adsb.lol), `opensky` ya da `adsblol` |
 | `HOME_LAT`, `HOME_LON` | Ev konumu (depo herkese açıksa kodda bırakmayın) |
 
 > Depo **public** ise kodda yazan yaklaşık ev koordinatı herkese görünür. Depoyu *private* yapın ya da
@@ -72,7 +73,7 @@ Streamlit, GitHub, AeroDataBox ve OpenSky sahtelerle çalışır (internet gerek
 radar akışı, terminal (≥20 satır, arama, kota), veritabanı + `data` dalı eşitleme.
 
 ## Veri kaynakları
-[OpenSky Network](https://opensky-network.org) (canlı konum) · [adsbdb](https://www.adsbdb.com) (rota, uçak) ·
+[OpenSky Network](https://opensky-network.org) ve [adsb.lol](https://adsb.lol) (canlı konum; OpenSky bulut sunucularına bazen zaman aşımı verir, uygulama otomatik adsb.lol'a geçer) · [adsbdb](https://www.adsbdb.com) (rota, uçak) ·
 [AeroDataBox](https://aerodatabox.com) (tarife) · [planespotters.net](https://www.planespotters.net) (fotoğraf) ·
 [Open-Meteo](https://open-meteo.com) (hava) · Harita: © OpenStreetMap katkıcıları, © CARTO
 

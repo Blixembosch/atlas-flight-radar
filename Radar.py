@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.1)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -102,6 +102,10 @@ OPENSKY_TOKEN_URL = (
     "protocol/openid-connect/token"
 )
 ADSBDB = "https://api.adsbdb.com/v0"
+ADSBLOL_URL = "https://api.adsb.lol/v2/point/{lat}/{lon}/{nm}"  # ücretsiz, anahtarsız yedek kaynak
+OPENSKY_TIMEOUT = 5
+OPENSKY_DOWN_S = 600  # OpenSky ulaşılamazsa bu süre boyunca yedek kaynak önce denenir
+_SRC = {"os_down_until": 0.0, "last_source": ""}  # sunucu geneli kaynak durumu
 
 # =============================================================================
 # HAVAYOLU VE UÇAK BİLGİLERİ
@@ -476,14 +480,19 @@ def _opensky_token(client_id, client_secret):
 
 def get_bearer():
   """secrets.toml içinde OpenSky bilgisi varsa token döndürür, yoksa ''."""
+  if time.time() < _SRC["os_down_until"]:  # OpenSky ulaşılamıyor: boşuna token isteği bekleme
+    return ""
   try:
     cid = st.secrets["opensky_client_id"]
     sec = st.secrets["opensky_client_secret"]
   except Exception:
     return ""
+  if not cid or not sec:
+    return ""
   try:
     return _opensky_token(cid, sec)
   except Exception:
+    _SRC["os_down_until"] = time.time() + 300
     return ""
 
 
@@ -495,22 +504,110 @@ def bbox_for(radius_km):
           "lomin": round(AIRPORT_LON - dlon, 3), "lomax": round(AIRPORT_LON + dlon, 3)}
 
 
-@st.cache_data(ttl=FETCH_TTL, show_spinner=False)
-def fetch_states(bearer, radius_km=NEAR_KM):
-  """(states, durum_mesajı, epoch) döndürür. Hata olsa da uygulama çökmez."""
+def _err_word(e):
+  n = type(e).__name__.lower()
+  if "timeout" in n:
+    return "zaman aşımı"
+  if "connection" in n:
+    return "bağlantı kurulamadı"
+  return "ulaşılamadı"
+
+
+def _from_opensky(bearer, radius_km):
+  """(states, hata_metni). Hata yoksa metin ''."""
   headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
   try:
-    r = requests.get(OPENSKY_URL, params=bbox_for(radius_km + 10), headers=headers, timeout=7)
-  except requests.RequestException:
-    return [], "OpenSky'ye ulaşılamıyor", time.time()
+    r = requests.get(OPENSKY_URL, params=bbox_for(radius_km + 10), headers=headers,
+                     timeout=OPENSKY_TIMEOUT)
+  except requests.RequestException as e:
+    return None, f"OpenSky {_err_word(e)}"
   if r.status_code == 429:
-    return [], "OpenSky günlük sorgu sınırı doldu", time.time()
+    return None, "OpenSky günlük sorgu sınırı doldu"
   if r.status_code != 200:
-    return [], f"OpenSky hata kodu {r.status_code}", time.time()
+    return None, f"OpenSky hata kodu {r.status_code}"
   try:
-    return r.json().get("states") or [], "ok", time.time()
+    return r.json().get("states") or [], ""
   except ValueError:
-    return [], "OpenSky yanıtı okunamadı", time.time()
+    return None, "OpenSky yanıtı okunamadı"
+
+
+def _num(x):
+  return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+
+
+def adsblol_to_states(js):
+  """adsb.lol (readsb) yanıtını OpenSky 'state vector' biçimine çevirir."""
+  now = time.time()
+  out = []
+  for a in (js or {}).get("ac") or []:
+    try:
+      lat, lon = _num(a.get("lat")), _num(a.get("lon"))
+      hexid = str(a.get("hex") or "").lower()
+      if lat is None or lon is None or not hexid or hexid.startswith("~"):
+        continue
+      alt = a.get("alt_baro")
+      ground = alt == "ground"
+      alt_ft = None if ground else _num(alt)
+      alt_m = None if alt_ft is None else alt_ft / 3.28084
+      geo_ft = _num(a.get("alt_geom"))
+      gs = _num(a.get("gs"))
+      vr = _num(a.get("baro_rate"))
+      if vr is None:
+        vr = _num(a.get("geom_rate"))
+      seen = _num(a.get("seen_pos")) or 0.0
+      tp = now - seen
+      out.append([hexid, str(a.get("flight") or "").strip(), "", tp, tp, lon, lat, alt_m, ground,
+                  None if gs is None else gs * 0.514444, _num(a.get("track")),
+                  None if vr is None else vr / 196.85, None,
+                  None if geo_ft is None else geo_ft / 3.28084, None, False, 0])
+    except Exception:  # tek bozuk kayıt tüm listeyi düşürmesin
+      continue
+  return out
+
+
+def _from_adsblol(radius_km):
+  nm = min(250, max(1, math.ceil((radius_km + 10) / 1.852)))
+  url = ADSBLOL_URL.format(lat=AIRPORT_LAT, lon=AIRPORT_LON, nm=nm)
+  try:
+    r = requests.get(url, timeout=8)
+  except requests.RequestException as e:
+    return None, f"adsb.lol {_err_word(e)}"
+  if r.status_code != 200:
+    return None, f"adsb.lol hata kodu {r.status_code}"
+  try:
+    return adsblol_to_states(r.json()), ""
+  except ValueError:
+    return None, "adsb.lol yanıtı okunamadı"
+
+
+@st.cache_data(ttl=FETCH_TTL, show_spinner=False)
+def fetch_states(bearer, radius_km=NEAR_KM):
+  """(states, durum_mesajı, epoch). Önce OpenSky, ulaşılamazsa ücretsiz adsb.lol.
+  Hata olsa da uygulama çökmez; kullanılan kaynak _SRC['last_source'] içinde tutulur."""
+  now = time.time()
+  pref = str(secret("TRAFFIC_SOURCE", "auto")).strip().lower()
+  if pref == "adsblol":
+    order = ["adsblol"]
+  elif pref == "opensky":
+    order = ["opensky"]
+  elif now < _SRC["os_down_until"]:
+    order = ["adsblol", "opensky"]
+  else:
+    order = ["opensky", "adsblol"]
+  errors = []
+  for src in order:
+    if src == "opensky":
+      states, err = _from_opensky(bearer, radius_km)
+      if err:
+        _SRC["os_down_until"] = time.time() + OPENSKY_DOWN_S
+    else:
+      states, err = _from_adsblol(radius_km)
+    if not err:
+      _SRC["last_source"] = "OpenSky Network" if src == "opensky" else "adsb.lol"
+      return states, "ok", time.time()
+    errors.append(err)
+  _SRC["last_source"] = ""
+  return [], " · ".join(errors), time.time()
 
 
 @st.cache_resource
@@ -1590,7 +1687,7 @@ def page_radar(db, store, demo, refresh_s_box):
       st.info("Şu an listelenecek uçak yok." + extra + " Arayüzü denemek için üstteki “Demo modu”nu aç.")
 
     st.markdown(
-        "<div class='foot'>Veri: OpenSky Network · adsbdb · Open-Meteo · "
+        f"<div class='foot'>Uçak konumu: {esc(_SRC['last_source'] or 'OpenSky Network / adsb.lol')} · adsbdb · Open-Meteo · "
         "Harita: © OpenStreetMap katkıcıları, © CARTO · Rota/tür bilgisi bazı uçaklarda eksik olabilir.</div>",
         unsafe_allow_html=True,
     )
