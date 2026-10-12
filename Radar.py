@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.3)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.4)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -56,13 +56,13 @@ AIRPORT_LAT, AIRPORT_LON = 51.4501, 5.3743  # Eindhoven Havalimanı
 AIRPORT_ICAO = "EHEH"
 
 # OpenSky sorgu kutusu (havalimanı + kuzey koridoru + ev çevresi)
-NEAR_KM = 45  # havalimanına bu kadar yakın alçak uçaklar her zaman gösterilir
+NEAR_KM = 50  # havalimanına bu kadar yakın alçak uçaklar her zaman gösterilir
 OVERFLIGHT_KM = 30  # "Üstümüzden geçenler": evden bu kadar yakın yüksek uçaklar
 INBOUND_MAX_ALT_FT = 25000  # uzaktan gelen (EIN'e alçalan) uçaklar için irtifa sınırı
 # Kapsama seçenekleri: etiket -> (tarama yarıçapı km, haritanın gösterdiği yarıçap km)
 # Not: OpenSky'de 25 derece-kareden küçük sorgu 1 kredi harcar; 200 km hâlâ bunun altında.
 COVERAGE = {
-    "📡 Yakın · 45 km": (45, 35),
+    "📡 Yakın · 50 km": (50, 40),
     "📡 Geniş · 100 km": (100, 85),
     "📡 Çok geniş · 200 km": (200, 170),
 }
@@ -834,9 +834,9 @@ def _inbound(s, lat, lon):
 
 def _candidates(states, overflights=False, coverage_km=NEAR_KM):
   """Hangi uçaklar işlenecek?
-    near    : havalimanına 45 km içinde, 10.000 ft altı
+    near    : havalimanına 50 km içinde, 10.000 ft altı
     transit : (seçenek açıksa) evden 30 km içinde, yüksekte geçenler
-    inbound : 45 km dışında ama EIN'e doğru alçalanlar (kapsama genişse)
+    inbound : 50 km dışında ama EIN'e doğru alçalanlar (kapsama genişse)
   """
   out = []
   for s in states:
