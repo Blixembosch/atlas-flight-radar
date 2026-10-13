@@ -8,3 +8,4 @@ for t in test_db_auth test_fids test_app test_radar_flow test_traffic test_async
 done
 echo "TÜM TESTLER GEÇTİ"
 python3 tests/test_terminal_diag.py || exit 1
+python3 tests/test_newformat.py || exit 1

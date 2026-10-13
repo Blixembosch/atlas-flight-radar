@@ -141,8 +141,15 @@ def parse_adb(js, only_direction=None):
       try:
         if not isinstance(f, dict):
           continue
-        mv = f.get("movement") or {}
-        ap = mv.get("airport") or {}
+        mv = f.get("movement")
+        if isinstance(mv, dict):            # eski biçim: tek "movement" bloğu
+          ap = mv.get("airport") or {}
+        else:                               # yeni biçim: departure + arrival blokları
+          own, other = ("departure", "arrival") if direction == "DEP" else ("arrival", "departure")
+          mv = dict(f.get(own) or {})
+          ap = (f.get(other) or {}).get("airport") or {}
+          if not mv.get("gate") and direction == "DEP":
+            mv["gate"] = (f.get("departure") or {}).get("gate")
         sched_iso = _iso_or_none(_local(mv, "scheduledTime"))
         if not sched_iso:
           continue
