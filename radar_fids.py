@@ -373,7 +373,7 @@ def refresh(db, key, now, http=None, host=ADB_HOST, monthly_units=DEFAULT_MONTHL
       na = sum(1 for x in rows if x["direction"] == "ARR")
       nd = sum(1 for x in rows if x["direction"] == "DEP")
       db.meta_set(fids_last_diag=(f"{to_iso(now)} · HTTP 200 · ham: {raw_a} varış / {raw_d} kalkış · "
-                                  f"çözümlenen: {na} / {nd} · yapı: {describe_payload(js)}"))
+                                  f"çözümlenen: {na} / {nd} · yapı: {describe_payload(js)} · ham metin: {str(getattr(r, 'text', '') or '')[:300]!r}"))
       if not rows:
         if raw_a + raw_d > 0:
           errors.append("uçuşlar çözümlenemedi (yanıt biçimi beklenenden farklı)")

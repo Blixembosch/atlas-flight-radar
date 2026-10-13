@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.6)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.7)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -287,6 +287,8 @@ header[data-testid="stHeader"]{background:transparent!important;height:0!importa
   min-height:42px;width:100%;justify-content:center;}
 div.stButton>button{border-radius:10px;font-weight:700;background:#1b2750;color:#e5e9f5;border:1px solid var(--line);}
 div.stButton>button:hover{border-color:#38bdf8;color:#fff;}
+[data-testid="stBaseButton-secondary"],[data-testid="stPopoverButton"],[data-testid="stBaseButton-secondary"] p,[data-testid="stPopoverButton"] p{background:#1b2750 !important;color:#e5e9f5 !important;border-color:var(--line) !important;}
+[data-testid="stBaseButton-secondary"]:hover{border-color:#38bdf8 !important;}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:8px 0 22px;padding:6px 12px;
   background:var(--card);border:1px solid var(--line);border-radius:12px;font-size:.78rem;color:#cdd5ea;}
 .lg{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
