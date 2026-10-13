@@ -1389,6 +1389,16 @@ import re  # noqa: E402
 
 PAGES = ["🛰️ Radar", "🛫 Terminal", "📒 Gözlem Defteri"]
 DEFAULT_PAGE = PAGES[1]      # açılışta Terminal: veritabanından anında dolar, Radar sekmeye geçince yüklenir
+APP_VERSION = "v0.3.12"
+CHANGELOG = [
+    ("v0.3.12", "Sürüm izi; havalimanı kodu açıklaması"),
+    ("v0.3.11", "Açılışta Terminal; 'Şimdi' görünümü (−60/+30 dk)"),
+    ("v0.3.10", "Sürüm değişince tarife otomatik çekilir"),
+    ("v0.3.8", "AeroDataBox yeni yanıt biçimi (departure/arrival) desteği"),
+    ("v0.3.5", "Modern uçak etiketi"),
+    ("v0.3.4", "Kapsama 50/100/200 km"),
+    ("v0.3.1", "OpenSky yoksa adsb.lol yedeği"),
+]
 
 
 def secret(name, default=""):
@@ -1507,7 +1517,7 @@ def term_head_html(now, mode, age_min):
   else:
     h = age_min // 60
     pill = f"<span class='livepill old'><i></i>Eski veri · {h} sa önce</span>"
-  return (f"<div class='term-head'><div><div class='tt'>Eindhoven Airport<span>EIN · EHEH</span></div>"
+  return (f"<div class='term-head'><div><div class='tt'>Eindhoven Airport<span title='EIN = IATA kodu (yolcu/bilet kodu) · EHEH = ICAO kodu (havacılık/uçuş kontrol kodu)'>EIN · EHEH</span></div>"
           f"<div class='ts'>Varış ve kalkış bilgi ekranı · {now.strftime('%d.%m.%Y')}</div></div>"
           f"<div class='tr'>{pill}<div class='clock'>{now.strftime('%H:%M')}</div></div></div>")
 
@@ -1817,8 +1827,6 @@ def _more_rows():
   st.session_state["fids_n"] = min(60, st.session_state.get("fids_n", 20) + 10)
 
 
-APP_VERSION = 'v0.3.11'
-
 
 def page_terminal(db, store, demo, refresh_s_box):
   ss = st.session_state
@@ -2013,6 +2021,11 @@ def main():
   box = []
   fn = {PAGES[0]: page_radar, PAGES[1]: page_terminal, PAGES[2]: page_diary}[page]
   fn(db, store, demo, box)
+
+  with st.popover(f"ℹ️ {APP_VERSION}"):
+    st.markdown("**Sürüm geçmişi**")
+    for v_, t_ in CHANGELOG:
+      st.markdown(f"- **{v_}** · {t_}")
 
   # 4) Otomatik yenileme (sayfaya göre; en sonda ki sayfa hatası yenilemeyi engellemesin diye değil,
   #    sayfanın kendi aralığı belli olduktan sonra kurulur)
