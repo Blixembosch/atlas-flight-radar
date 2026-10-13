@@ -101,6 +101,34 @@ def _flight_key(direction, number, sched, callsign, other):
   return hashlib.sha1(base.encode()).hexdigest()[:16]
 
 
+def _local(mv, base):
+  """Saat alanını iki sürüm biçiminde de okur:
+     {"scheduledTime": {"utc": .., "local": ..}}  ya da  {"scheduledTimeLocal": "..."}."""
+  v = mv.get(base)
+  if isinstance(v, dict):
+    out = v.get("local") or v.get("Local")
+    if out:
+      return out
+  elif isinstance(v, str) and v:
+    return v
+  return mv.get(base + "Local") or mv.get(base.replace("Time", "TimeLocal")) or None
+
+
+def describe_payload(js, depth=3):
+  """Yanıtın YAPISINI (değerleri değil) kısa metne çevirir; tanı için."""
+  def shape(x, d):
+    if isinstance(x, dict):
+      if d <= 0:
+        return "{…}"
+      return "{" + ",".join(f"{k}{shape(v, d - 1) if isinstance(v, (dict, list)) else ''}" for k, v in list(x.items())[:14]) + "}"
+    if isinstance(x, list):
+      return f"[{len(x)}]" + (shape(x[0], d - 1) if x and d > 0 else "")
+    return ""
+  if not isinstance(js, dict):
+    return f"yanıt sözlük değil ({type(js).__name__})"
+  return ", ".join(f"{k}{shape(v, depth)}" for k, v in list(js.items())[:8])[:600]
+
+
 def parse_adb(js, only_direction=None):
   """AeroDataBox yanıtını satır sözlüklerine çevirir. Bozuk/eksik alanlar atlanır, hata fırlatmaz."""
   rows = []
@@ -115,13 +143,11 @@ def parse_adb(js, only_direction=None):
           continue
         mv = f.get("movement") or {}
         ap = mv.get("airport") or {}
-        sched = (mv.get("scheduledTime") or {}).get("local") or (mv.get("scheduledTime") or {}).get("utc")
-        sched_iso = _iso_or_none((mv.get("scheduledTime") or {}).get("local"))
+        sched_iso = _iso_or_none(_local(mv, "scheduledTime"))
         if not sched_iso:
           continue
-        est = _iso_or_none((mv.get("revisedTime") or {}).get("local")) or \
-            _iso_or_none((mv.get("predictedTime") or {}).get("local"))
-        actual = _iso_or_none((mv.get("runwayTime") or {}).get("local"))
+        est = _iso_or_none(_local(mv, "revisedTime")) or _iso_or_none(_local(mv, "predictedTime"))
+        actual = _iso_or_none(_local(mv, "runwayTime"))
         number = re.sub(r"\s+", " ", str(f.get("number") or "")).strip() or None
         cs = (f.get("callSign") or "").strip().upper() or None
         al = f.get("airline") or {}
@@ -254,10 +280,10 @@ def due_for_refresh(db, now, state, force=False):
   last = db.meta_get("fids_last_fetch")
   last_dt = parse_local(last) if last else None
   age_h = (now.replace(tzinfo=None) - last_dt).total_seconds() / 3600 if last_dt else 999
+  if force:
+    return (True, "elle") if age_h * 60 >= 2 else (False, "az önce çekildi")
   if age_h < MIN_INTERVAL_H:
     return False, "yakın zamanda çekildi"
-  if force:
-    return True, "elle"
   if age_h >= state["interval_h"]:
     return True, "süre doldu"
   # Önbellekte ileriye dönük yeterli satır yoksa (ör. gün sonu), alt sınırdan sonra çek
@@ -322,6 +348,9 @@ def refresh(db, key, now, http=None, host=ADB_HOST, monthly_units=DEFAULT_MONTHL
         errors.append("429 istek sınırı")
         db.log_fetch(to_iso(now), PROVIDER, to_iso(w0), to_iso(w1), False, note=errors[-1])
         break
+      if r.status_code != 200:
+        body = str(getattr(r, "text", "") or "")[:160].replace("\n", " ")
+        db.meta_set(fids_last_diag=f"{to_iso(now)} · HTTP {r.status_code} · {body}")
       if r.status_code in (401, 403):
         errors.append(f"{r.status_code} yetki: anahtar geçersiz ya da abonelik yok")
         db.log_fetch(to_iso(now), PROVIDER, to_iso(w0), to_iso(w1), False, note=errors[-1])
@@ -332,14 +361,27 @@ def refresh(db, key, now, http=None, host=ADB_HOST, monthly_units=DEFAULT_MONTHL
         break
       db.add_usage(month_key(now), PROVIDER, 1, units_per_call)
       try:
-        rows = parse_adb(r.json())
+        js = r.json()
+        rows = parse_adb(js)
       except Exception:
         errors.append("yanıt çözümlenemedi")
+        db.meta_set(fids_last_diag=f"HTTP 200 · JSON okunamadı")
         db.log_fetch(to_iso(now), PROVIDER, to_iso(w0), to_iso(w1), False, note=errors[-1])
         break
-      db.upsert_fids(rows, to_iso(now))
+      raw_a = len((js or {}).get("arrivals") or []) if isinstance(js, dict) else 0
+      raw_d = len((js or {}).get("departures") or []) if isinstance(js, dict) else 0
       na = sum(1 for x in rows if x["direction"] == "ARR")
       nd = sum(1 for x in rows if x["direction"] == "DEP")
+      db.meta_set(fids_last_diag=(f"{to_iso(now)} · HTTP 200 · ham: {raw_a} varış / {raw_d} kalkış · "
+                                  f"çözümlenen: {na} / {nd} · yapı: {describe_payload(js)}"))
+      if not rows:
+        if raw_a + raw_d > 0:
+          errors.append("uçuşlar çözümlenemedi (yanıt biçimi beklenenden farklı)")
+        else:
+          errors.append("API bu aralık için uçuş döndürmedi")
+        db.log_fetch(to_iso(now), PROVIDER, to_iso(w0), to_iso(w1), False, note=errors[-1])
+        break                                   # boş yanıtta ikinci pencereyle kota harcama
+      db.upsert_fids(rows, to_iso(now))
       got_arr += na
       got_dep += nd
       db.log_fetch(to_iso(now), PROVIDER, to_iso(w0), to_iso(w1), True, na, nd)

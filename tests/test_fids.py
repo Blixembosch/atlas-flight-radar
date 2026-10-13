@@ -5,8 +5,8 @@ import radar_db as R
 import radar_fids as F
 
 FAILS = []
-def ck(name, cond):
-  print(("OK   " if cond else "FAIL ") + name)
+def ck(name, cond, info=""):
+  print(("OK   " if cond else "FAIL ") + name + (f"   [{info}]" if (info and not cond) else ""))
   if not cond: FAILS.append(name)
 
 NOW = datetime(2026, 10, 12, 14, 7, tzinfo=F.TZ)
@@ -158,5 +158,54 @@ ck("demo çeşitli durum", {"ok", "warn", "bad", "done", "info"} <= kinds | {"ok
 ck("demo gecikme sütunu", any(r["delay_txt"] for r in dm))
 ck("demo saatler sıralı", [r["sched_local"] for r in dm] == sorted(r["sched_local"] for r in dm))
 
+
+# ================= v0.3.6: yanıt biçimi varyantları, boş yanıt, tanı
+def flat(num, hhmm, **kw):
+  mv = {"airport": {"icao": "LEMG", "iata": "AGP", "municipalityName": "Malaga", "countryCode": "ES"},
+        "scheduledTimeLocal": f"2026-10-12 {hhmm}+02:00", "scheduledTimeUtc": "x"}
+  if kw.get("rev"): mv["revisedTimeLocal"] = f"2026-10-12 {kw['rev']}+02:00"
+  if kw.get("run"): mv["runwayTimeLocal"] = f"2026-10-12 {kw['run']}+02:00"
+  return {"movement": mv, "number": num, "status": kw.get("status", "Expected"),
+          "airline": {"name": "Transavia", "iata": "HV", "icao": "TRA"}, "aircraft": {"model": "B738"}}
+js2 = {"departures": [flat("HV 1", "15:00", rev="15:25"), flat("HV 2", "16:00", status="Departed", run="16:03")],
+       "arrivals": [flat("HV 3", "14:30")]}
+r2 = F.parse_adb(js2)
+ck("düz alan biçimi (scheduledTimeLocal) çözülür", [x["number"] for x in r2] == ["HV 1", "HV 2", "HV 3"], [x["number"] for x in r2])
+ck("düz biçim: tahmini/gerçekleşen saat", r2[0]["est_local"] == "2026-10-12T15:25" and r2[1]["actual_local"] == "2026-10-12T16:03")
+ck("düz biçim: gecikme +25", F.board_row(r2[0], NOW)["delay_txt"] == "+25 dk")
+mixed = {"departures": [{"movement": {"airport": {}, "scheduledTime": "2026-10-12 15:00+02:00"}, "number": "X 1"}]}
+ck("saat düz metin olarak da gelirse çözülür", len(F.parse_adb(mixed)) == 1)
+d = F.describe_payload(js)
+ck("tanı: yapı metni (değer yok)", "departures[" in d and "movement" in d and "HV 5101" not in d and "Transavia" not in d, d)
+ck("tanı: sözlük olmayan yanıt", "sözlük değil" in F.describe_payload([1]))
+
+# boş 200 yanıtı: ikinci pencereye gitmez, sebep yazılır, 'son başarılı' işaretlenmez
+db = newdb(); http = Http(Resp(200, {"departures": [], "arrivals": []}))
+r = F.refresh(db, "K", NOW, http=http)
+ck("boş yanıt: tek çağrı (kota boşa gitmez)", len(http.calls) == 1 and r["calls"] == 1, len(http.calls))
+ck("boş yanıt: sebep yazılır", "uçuş döndürmedi" in r["error"], r["error"])
+ck("boş yanıt: 'son başarılı' işaretlenmez", db.meta_get("fids_last_ok") in (None, ""))
+ck("boş yanıt: tanı kaydı", "ham: 0 varış / 0 kalkış" in (db.meta_get("fids_last_diag") or ""))
+# ham var ama çözülemiyor
+db = newdb(); http = Http(Resp(200, {"departures": [{"foo": 1}], "arrivals": []}))
+r = F.refresh(db, "K", NOW, http=http)
+ck("çözülemeyen biçim açıkça belirtilir", "biçimi beklenenden farklı" in r["error"] and "ham: 0 varış / 1 kalkış" in db.meta_get("fids_last_diag"))
+# HTTP hatası tanıya yazılır
+class R403(Resp):
+  text = '{"message":"You are not subscribed to this API."}'
+db = newdb(); F.refresh(db, "SECRETKEY", NOW, http=Http(R403(403)))
+dg = db.meta_get("fids_last_diag")
+ck("HTTP hatası tanıda, anahtar yok", "HTTP 403" in dg and "not subscribed" in dg and "SECRETKEY" not in dg, dg)
+# zorla yenileme: 1 saatlik alt sınırı aşar ama 2 dk korumalı
+db = newdb(); http = Http(Resp(200, {"departures": many(30, 0, "DEP"), "arrivals": many(30, 0, "ARR")}))
+F.refresh(db, "K", NOW, http=http); n = len(http.calls)
+F.refresh(db, "K", NOW + timedelta(minutes=1), http=http, force=True)
+ck("zorla: 2 dakikadan önce reddedilir", len(http.calls) == n)
+F.refresh(db, "K", NOW + timedelta(minutes=10), http=http, force=True)
+ck("zorla: 10 dk sonra çeker (1 saat beklemez)", len(http.calls) > n)
+n = len(http.calls)
+db.add_usage("2026-10", F.PROVIDER, 270, 540)
+F.refresh(db, "K", NOW + timedelta(minutes=30), http=http, force=True)
+ck("zorla: bütçe bitmişse yine çağırmaz", len(http.calls) == n)
 print("\nBAŞARISIZ:", FAILS if FAILS else "yok")
 sys.exit(1 if FAILS else 0)

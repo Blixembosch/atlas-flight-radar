@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.5)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.6)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -1840,15 +1840,21 @@ def page_terminal(db, store, demo, refresh_s_box):
           fids.refresh(db, key, fids.now_local(), host=host, monthly_units=monthly)
           db.maybe_push()
         _spawn(_bg)
-  res = {"error": "" if demo else (db.meta_get("fids_last_error") or "")}
 
   q1, q2 = st.columns([3, 1.2], vertical_alignment="center")
+  with q2:
+    if not demo and key and st.button("🔄 Tarifeyi yenile", key="fids_force", use_container_width=True,
+                                       help="Tarifeyi hemen çeker (2 kota birimi harcar)."):
+      with st.spinner("Tarife çekiliyor…"):
+        fids.refresh(db, key, now, host=host, monthly_units=monthly, force=True)
+      db.maybe_push()
   with q1:
     query = st.text_input("Ara", key="fids_q", label_visibility="collapsed",
                           placeholder="🔍 Uçuş no, havayolu, şehir, kapı: HV5101, Ryanair, Malaga, B3...")
   limit = int(ss.get("fids_n", 20))
   remember(["fids_q", "fids_n"])
 
+  res = {"error": "" if demo else (db.meta_get("fids_last_error") or "")}
   if demo:
     mode, age = "demo", None
     dep, dep_total = fids.select_demo("DEP", now, limit, query)
@@ -1896,6 +1902,11 @@ def page_terminal(db, store, demo, refresh_s_box):
   if res.get("error") and not demo:
     st.markdown(f"<div class='tnote warn'>⚠️ Tarife güncellenemedi: {esc(res['error'])} "
                 "· Son kayıtlı veri gösteriliyor.</div>", unsafe_allow_html=True)
+  if not demo and key:
+    with st.popover("🛠 Tanı"):
+      st.markdown("**Son tarife çekme:**")
+      st.code(db.meta_get("fids_last_diag") or "henüz çekilmedi", language=None)
+      st.caption("Bu metin yalnızca yanıtın yapısını içerir (anahtar/şifre içermez).")
   if demo:
     foot = "Demo tarifesi örnek verilerdir; gerçek uçuşları göstermez."
   else:

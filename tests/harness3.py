@@ -72,6 +72,7 @@ class FakeSt(types.ModuleType):
         return [Ctx() for _ in range(n)]
     def popover(self, *a, **k): return Ctx()
     def spinner(self, *a, **k): return Ctx()
+    def code(self, t, **k): self.md.append("<code>" + str(t) + "</code>")
     # --- bileşenler
     def _w(self, key, label, default, options=None):
         k = key or label
