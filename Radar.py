@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.8)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.9)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -1816,6 +1816,9 @@ def _more_rows():
   st.session_state["fids_n"] = min(60, st.session_state.get("fids_n", 20) + 10)
 
 
+APP_VERSION = 'v0.3.9'
+
+
 def page_terminal(db, store, demo, refresh_s_box):
   ss = st.session_state
   refresh_s_box.append(60)
@@ -1848,8 +1851,11 @@ def page_terminal(db, store, demo, refresh_s_box):
     if not demo and key and st.button("🔄 Tarifeyi yenile", key="fids_force", use_container_width=True,
                                        help="Tarifeyi hemen çeker (2 kota birimi harcar)."):
       with st.spinner("Tarife çekiliyor…"):
-        fids.refresh(db, key, now, host=host, monthly_units=monthly, force=True)
+        _r = fids.refresh(db, key, now, host=host, monthly_units=monthly, force=True)
       db.maybe_push()
+      ss["fids_force_msg"] = (f"Çekme sonucu: {'başarılı' if _r.get('fetched') else 'veri alınamadı'} · "
+                              f"neden: {_r.get('reason') or '-'} · çağrı: {_r.get('calls', 0)}"
+                              + (f" · hata: {_r['error']}" if _r.get("error") else ""))
   with q1:
     query = st.text_input("Ara", key="fids_q", label_visibility="collapsed",
                           placeholder="🔍 Uçuş no, havayolu, şehir, kapı: HV5101, Ryanair, Malaga, B3...")
@@ -1906,6 +1912,9 @@ def page_terminal(db, store, demo, refresh_s_box):
                 "· Son kayıtlı veri gösteriliyor.</div>", unsafe_allow_html=True)
   if not demo and key:
     with st.popover("🛠 Tanı"):
+      st.markdown(f"**Sürüm:** {APP_VERSION}")
+      if ss.get("fids_force_msg"):
+        st.markdown(f"**Son düğme basışı:** {ss['fids_force_msg']}")
       st.markdown("**Son tarife çekme:**")
       st.code(db.meta_get("fids_last_diag") or "henüz çekilmedi", language=None)
       st.caption("Bu metin yalnızca yanıtın yapısını içerir (anahtar/şifre içermez).")
