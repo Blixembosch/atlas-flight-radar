@@ -90,14 +90,14 @@ ck("rotasız uçak deftere yazılmadı", all(r["callsign"] != "ZZZ999" for r in 
 # ================= 4) Sayfalar arası durum korunur
 fake.secrets.pop("AERODATABOX_KEY")
 set_ss("f_over", True); run()
-set_ss("page", P[1]); run()
+set_ss("page", P[1]); set_ss("fids_view", "Tüm gün"); run()
 ck("terminal sayfasında radar bileşen anahtarı silinir (Streamlit davranışı)", "f_over" not in fake.session_state)
 set_ss("page", P[0]); run()
 ck("radara dönünce 'Üstümüzden geçenler' hâlâ açık", fake.session_state.get("f_over") is True)
 set_ss("f_over", False); run()
 
 # ================= 5) Terminal: anahtar yok
-set_ss("page", P[1]); run()
+set_ss("page", P[1]); set_ss("fids_view", "Tüm gün"); run()
 ck("anahtar yokken boş durum açıklaması", "AERODATABOX_KEY" in md())
 ck("anahtar yokken AeroDataBox çağrısı yok", Net.calls["adb"] == 0)
 ck("iki panel de çizildi (Varış/Kalkış)", "tphead arr" in md() and "tphead dep" in md())

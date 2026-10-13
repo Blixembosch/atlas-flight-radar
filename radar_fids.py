@@ -249,7 +249,22 @@ def board_matches(r, q):
   return q in hay
 
 
-def select_board(db, direction, now, limit=MIN_ROWS, past_min=45, query=""):
+def _eff(r):
+  return parse_local(r.get("actual_local")) or parse_local(r.get("est_local")) or parse_local(r.get("sched_local"))
+
+
+def select_board(db, direction, now, limit=MIN_ROWS, past_min=45, query="", window=None):
+  """window=(geri_dk, ileri_dk): yalnızca etkin saati (gerçekleşen/tahmini/planlanan) bu aralıktakiler."""
+  if window:
+    n0 = now.replace(tzinfo=None)
+    rows = db.fids_between(direction, to_iso(now - timedelta(hours=6)), to_iso(now + timedelta(hours=12)))
+    out = [board_row(r, now) for r in rows]
+    out = [r for r in out if (e := _eff(r)) and n0 - timedelta(minutes=window[0]) <= e <= n0 + timedelta(minutes=window[1])]
+    out.sort(key=lambda r: _eff(r))
+    if query:
+      out = [r for r in out if board_matches(r, query)]
+    return out[:limit], len(out)
+
   """Ekranda gösterilecek satırlar: son `past_min` dk içindekiler + gelecekler, en az `limit` (varsa)."""
   start = to_iso(now - timedelta(minutes=past_min))
   end = to_iso(now + timedelta(hours=36))

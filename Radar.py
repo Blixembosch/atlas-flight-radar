@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.9)
+Atlas'ın Uçak Gözlem Kulesi  (v0.3.11)
   * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
@@ -1388,6 +1388,7 @@ def build_map(flights, sel_id, cov_km=NEAR_KM, view_km=35, view=None):
 import re  # noqa: E402
 
 PAGES = ["🛰️ Radar", "🛫 Terminal", "📒 Gözlem Defteri"]
+DEFAULT_PAGE = PAGES[1]      # açılışta Terminal: veritabanından anında dolar, Radar sekmeye geçince yüklenir
 
 
 def secret(name, default=""):
@@ -1816,7 +1817,7 @@ def _more_rows():
   st.session_state["fids_n"] = min(60, st.session_state.get("fids_n", 20) + 10)
 
 
-APP_VERSION = 'v0.3.9'
+APP_VERSION = 'v0.3.11'
 
 
 def page_terminal(db, store, demo, refresh_s_box):
@@ -1832,6 +1833,12 @@ def page_terminal(db, store, demo, refresh_s_box):
     monthly = fids.DEFAULT_MONTHLY_UNITS
 
   t0 = time.time()
+  if not demo and key and db.meta_get("fids_parser") != APP_VERSION:
+    db.meta_set(fids_parser=APP_VERSION)
+    if not db.fids_between("DEP", fids.to_iso(now - timedelta(hours=1)), fids.to_iso(now + timedelta(hours=12))):
+      with st.spinner("Tarife yeni biçimle çekiliyor…"):
+        fids.refresh(db, key, now, host=host, monthly_units=monthly, force=True)
+      db.maybe_push()
   if not demo and key:
     bs0 = fids.budget_state(db, now, monthly)
     due, _why = fids.due_for_refresh(db, now, bs0)
@@ -1860,7 +1867,11 @@ def page_terminal(db, store, demo, refresh_s_box):
     query = st.text_input("Ara", key="fids_q", label_visibility="collapsed",
                           placeholder="🔍 Uçuş no, havayolu, şehir, kapı: HV5101, Ryanair, Malaga, B3...")
   limit = int(ss.get("fids_n", 20))
-  remember(["fids_q", "fids_n"])
+  keep({"fids_view": "Şimdi"})
+  view = st.radio("Görünüm", ["Şimdi", "Tüm gün"], key="fids_view", horizontal=True, label_visibility="collapsed",
+                  help="Şimdi: inenler/kalkanlar (son 60 dk), inmekte/kalkmakta olanlar ve önümüzdeki 30 dk.")
+  remember(["fids_q", "fids_n", "fids_view"])
+  win = (60, 30) if view == "Şimdi" else None
 
   res = {"error": "" if demo else (db.meta_get("fids_last_error") or "")}
   if demo:
@@ -1869,8 +1880,8 @@ def page_terminal(db, store, demo, refresh_s_box):
     arr, arr_total = fids.select_demo("ARR", now, limit, query)
   else:
     mode, age = "live", fids.data_age_min(db, now)
-    dep, dep_total = fids.select_board(db, "DEP", now, limit, query=query)
-    arr, arr_total = fids.select_board(db, "ARR", now, limit, query=query)
+    dep, dep_total = fids.select_board(db, "DEP", now, limit, query=query, window=win)
+    arr, arr_total = fids.select_board(db, "ARR", now, limit, query=query, window=win)
 
   # Logolar: beklemeden (önbellekte olanlar hemen, olmayanlar arka planda indirilir)
   pairs = sorted({(airline_key_for(r), r.get("airline_iata") or "") for r in dep + arr} - {("", "")})
@@ -1981,12 +1992,12 @@ def main():
   store = get_store()
 
   # 2) Gezinme
-  keep({"page": PAGES[0], "demo": False})
+  keep({"page": DEFAULT_PAGE, "demo": False})
   with st.container(key="nav"):
     n1, n2, n3 = st.columns([5, 1.5, 1], vertical_alignment="center")
     with n1:
       if st.session_state["page"] not in PAGES:
-        st.session_state["page"] = PAGES[0]
+        st.session_state["page"] = DEFAULT_PAGE
       page = st.radio("Sayfa", PAGES, horizontal=True, key="page", label_visibility="collapsed")
     with n2:
       demo = st.toggle("Demo modu", key="demo", help="Gece uçak yokken arayüzü denemek için örnek veri.")

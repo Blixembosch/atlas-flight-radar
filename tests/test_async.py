@@ -18,7 +18,7 @@ H.run(); set_ss("Şifre", "p"); fake.pressed = {"Giriş yap"}; H.run()
 Net.adb_json = adb_payload(); Net.adb_delay = 1.2; Net.logo_delay = 1.2
 
 # 1) hiç veri yok: ilk seferde bekler (boş ekran göstermemek için)
-set_ss("page", P[1]); dt = timed()
+set_ss("page", P[1]); set_ss("fids_view", "Tüm gün"); dt = timed()
 ck("ilk açılışta tarife beklenir ve dolu gelir", Net.calls["adb"] == 1 and md().count("class='frow") >= 40, (Net.calls["adb"], dt))
 ck("logo indirmesi sayfayı BEKLETMEZ (1.2 sn gecikmeli logolar)", dt < 2.2, dt)   # tarife ~1.2 + logo 0
 ck("logolar bekliyorken kısa yenileme (5 sn)", fake.refresh == 5000, fake.refresh)
@@ -52,7 +52,7 @@ def broken(url, **kw):
     if "avs.io" in url or "gstatic" in url or "kiwi" in url: raise Exception("logo sunucusu yok")
     return orig(url, **kw)
 rq.get = broken
-set_ss("page", P[1]); H.run(); radar.join_background(); H.run()
+set_ss("page", P[1]); set_ss("fids_view", "Tüm gün"); H.run(); radar.join_background(); H.run()
 ck("logo sunucusu çökükken sayfa çalışır", md().count("class='frow") >= 40 and "alogo txt" in md())
 ck("başarısız logo önbelleğe alınır: 5 sn döngüsü yok", fake.refresh == 60000, fake.refresh)
 rq.get = orig
