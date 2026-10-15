@@ -11,3 +11,4 @@ python3 tests/test_terminal_diag.py || exit 1
 python3 tests/test_newformat.py || exit 1
 python3 tests/test_window.py || exit 1
 python3 tests/test_default_page.py || exit 1
+python3 tests/test_warm.py || exit 1

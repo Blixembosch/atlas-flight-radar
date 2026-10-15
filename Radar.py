@@ -954,6 +954,35 @@ def _spawn(fn, *args):
   return t
 
 
+_WARM = {"t": 0.0, "busy": False}
+WARM_EVERY_S = 25
+
+
+def warm_radar(store, bearer, cov_km):
+  """Radar dışındaki sayfalardayken (ör. açılış sayfası Terminal) trafik verisini, rota ve uçak
+  kayıtlarını arka planda ısıtır: Radar sekmesine geçildiğinde hepsi hazır olur."""
+  now = time.time()
+  with _BG_LOCK:
+    if _WARM["busy"] or now - _WARM["t"] < WARM_EVERY_S:
+      return
+    _WARM["busy"] = True
+    _WARM["t"] = now
+
+  def work():
+    try:
+      res = _fetch_states_live(bearer, cov_km)
+      _TCACHE[(bearer, cov_km)] = (time.time(), res)
+      if res[1] == "ok":
+        fl = build_flights(res[0], store, False, cov_km, True)
+        attach_logos(fl, store)
+    except Exception:
+      pass
+    finally:
+      with _BG_LOCK:
+        _WARM["busy"] = False
+  _spawn(work)
+
+
 def join_background(timeout=10):
   """Testler için: bekleyen arka plan işlerinin bitmesini bekler."""
   for t in list(_BG["threads"]):
@@ -1389,8 +1418,9 @@ import re  # noqa: E402
 
 PAGES = ["🛰️ Radar", "🛫 Terminal", "📒 Gözlem Defteri"]
 DEFAULT_PAGE = PAGES[1]      # açılışta Terminal: veritabanından anında dolar, Radar sekmeye geçince yüklenir
-APP_VERSION = "v0.3.12"
+APP_VERSION = "v0.3.13"
 CHANGELOG = [
+    ("v0.3.13", "Radar önceden ısıtılır: Terminal açıkken trafik/rota/uçak verisi arka planda hazırlanır"),
     ("v0.3.12", "Sürüm izi; havalimanı kodu açıklaması"),
     ("v0.3.11", "Açılışta Terminal; 'Şimdi' görünümü (−60/+30 dk)"),
     ("v0.3.10", "Sürüm değişince tarife otomatik çekilir"),
@@ -2019,6 +2049,9 @@ def main():
   st.session_state["_switched"] = st.session_state.get("_last_page") != page
   st.session_state["_last_page"] = page
   box = []
+  if page != PAGES[0] and not demo:
+    _cov = st.session_state.get("f_cov")
+    warm_radar(store, get_bearer(), COVERAGE[_cov if _cov in COVERAGE else list(COVERAGE)[0]][0])
   fn = {PAGES[0]: page_radar, PAGES[1]: page_terminal, PAGES[2]: page_diary}[page]
   fn(db, store, demo, box)
 
