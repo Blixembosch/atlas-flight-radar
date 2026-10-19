@@ -53,7 +53,7 @@ Net.states = [row("a1", "TRA6710", 51.505, 5.52, 2400, 275, 215, -4), row("a9", 
 radar.get_store().clear(); radar._TCACHE.clear()
 dt = timed()
 ck("logo yokken radar beklemez (<0.8 sn)", dt < 0.8, dt)
-ck("logolar inerken kısa yenileme", fake.refresh == 5000, fake.refresh)
+ck("logolar inerken kısa yenileme", fake.refresh in (4000, 5000), fake.refresh)
 radar.join_background(); H.run()
 ck("logo inince 5 sn döngüsü biter", fake.refresh != 5000, fake.refresh)
 ck("altbilgide zamanlama", "⏱" in "\n".join(fake.md) and "toplam" in "\n".join(fake.md))

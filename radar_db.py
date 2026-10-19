@@ -301,6 +301,8 @@ class RadarDB:
     self.fetch_lock = threading.Lock()   # tarife çekmeyi oturumlar arasında tekilleştirir
     self._push_lock = threading.Lock()
     self._push_thread = None
+    self.sync_done = threading.Event()   # açılış senkronu bitti mi? (git yoksa baştan hazır)
+    self.sync_done.set()
     self.dirty = False
     self.write_seq = 0
     self.last_push = 0.0
@@ -552,6 +554,29 @@ class RadarDB:
         return "error"
     return status
 
+  def start_background_sync(self):
+    """Açılış çekmesini arka planda yapar: uygulama GitHub'ı beklemeden açılır.
+    Çekme bitene kadar `sync_done` kapalıdır ve push yapılmaz (veri ezilmez)."""
+    if not self.git:
+      return
+    self.sync_done.clear()
+
+    def work():
+      try:
+        status, data = self.git.pull()
+        if status == "ok":
+          with self.lock:
+            if self.write_seq == 0:
+              self.install_remote(data)      # yerelde henüz yazı yok: uzağı olduğu gibi al
+            else:
+              self.merge_remote(data)        # bu arada yazı olduysa kaybetme: birleştir
+      except Exception as e:                  # bozuk dosya: yerel kalsın, push kapalı kalsın
+        self.git.synced_ok = False
+        self.git.last_error = f"{type(e).__name__}: {e}"
+      finally:
+        self.sync_done.set()
+    threading.Thread(target=work, daemon=True, name="radar-db-sync").start()
+
   def _sync_then_push(self):
     """Arka plan iş parçacığı: gerekirse çek+birleştir, sonra yükle."""
     seq = self.write_seq
@@ -581,7 +606,7 @@ class RadarDB:
 
   def maybe_push(self, force=False, wait=False):
     """Değişiklik varsa ve süre dolduysa arka planda GitHub'a yükler. Başlatıldıysa True."""
-    if not self.git or (not self.dirty and not force):
+    if not self.git or (not self.dirty and not force) or not self.sync_done.is_set():
       return False
     if not force and time.time() - self.last_push < self.push_interval:
       return False
@@ -610,7 +635,7 @@ class RadarDB:
             "synced": g.synced_ok}
 
 
-def open_db(secret, path=DEFAULT_DB_PATH, http=None):
+def open_db(secret, path=DEFAULT_DB_PATH, http=None, background=False):
   """secret(name, default) -> str. Ayarlar: GITHUB_TOKEN, GITHUB_REPO, DATA_BRANCH, DATA_DB_PATH, DB_PUSH_MIN."""
   token = secret("GITHUB_TOKEN", "")
   git = None
@@ -624,5 +649,8 @@ def open_db(secret, path=DEFAULT_DB_PATH, http=None):
   except ValueError:
     interval = 1200
   db = RadarDB(path, git=git, push_interval_s=interval)
-  db.startup_sync()
+  if background:
+    db.start_background_sync()
+  else:
+    db.startup_sync()
   return db

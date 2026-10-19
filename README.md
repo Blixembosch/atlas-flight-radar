@@ -1,4 +1,4 @@
-# ✈️ Atlas'ın Uçak Gözlem Kulesi · v0.3.13
+# ✈️ Atlas'ın Uçak Gözlem Kulesi · v0.3.14
 
 Eindhoven Havalimanı (EHEH) kuzey koridorunu ve Blixembosch bahçesinin üzerinden geçen uçakları
 canlı gösteren, koyu temalı Streamlit panosu.
@@ -78,3 +78,9 @@ radar akışı, terminal (≥20 satır, arama, kota), veritabanı + `data` dalı
 [Open-Meteo](https://open-meteo.com) (hava) · Harita: © OpenStreetMap katkıcıları, © CARTO
 
 > Rota, model ve koltuk bilgisi bazı uçaklarda eksik olabilir. Koltuk sayıları tipik düzene göre yaklaşıktır.
+
+## Testler
+
+`bash tests/run_all.sh` — tüm testler (internet gerekmez). `tests/test_perf.py` uçtan uca performans testidir:
+gerçekçi ağ gecikmeleriyle (GitHub, OpenSky zaman aşımı, adsbdb, hava durumu, fotoğraf) giriş → Terminal → Radar
+yolculuğunda her çizimin süre bütçesini doğrular. `PERF_SCALE=1 python3 tests/test_perf.py` gerçek gecikmelerle çalıştırır.

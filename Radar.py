@@ -88,7 +88,7 @@ CORRIDOR_LEN_KM = 14
 CORRIDOR_HALF_WIDTH_KM = 1.5
 
 LOGO_DIR = Path(__file__).parent / "assets" / "logos"
-ENRICH_WORKERS = 8  # rota/tür/logo sorguları paralel yapılır
+ENRICH_WORKERS = 12  # rota/tür/logo sorguları paralel yapılır
 RUNWAY_AXIS = 30  # pist 03/21 ekseni (derece)
 RUNWAY_NEAR_KM = 10  # pist tespiti için havalimanına bu kadar yakın uçaklara bakılır
 LOGO_URLS = [  # sırayla denenir; ilk çalışan sunucu tarafında indirilip gömülür
@@ -587,9 +587,38 @@ _TCACHE = {}          # (bearer, yarıçap) -> (zaman, sonuç)   (tüm oturumlar
 STALE_OK_S = 120      # sayfa geçişinde bu kadar eski veri anında gösterilir, arka planda tazelenir
 
 
-def fetch_states(bearer, radius_km=NEAR_KM, allow_stale=False):
-  """(states, durum_mesajı, epoch). FETCH_TTL sn önbellek. allow_stale=True iken (sayfa geçişi)
-  eski ama başarılı veri beklemeden verilir, tazesi arka planda çekilir."""
+def _traffic_job(key, bearer, radius_km, store, cov_km, overflights):
+  """Arka plan: trafik verisini çeker, rota/uçak/logo kayıtlarını ısıtır, SONRA yayımlar
+  (sayfa yayımlanan veriyi anında çizer, rota için beklemez)."""
+  try:
+    res = _fetch_states_live(bearer, radius_km)
+    if store is not None and res[1] == "ok":
+      try:
+        attach_logos(build_flights(res[0], store, overflights, cov_km, True), store)
+      except Exception:
+        pass
+    _TCACHE[key] = (time.time(), res)
+  except Exception:
+    pass
+  finally:
+    with _BG_LOCK:
+      _BG["logo"].discard(("traffic", key))
+
+
+def _start_traffic_job(key, bearer, radius_km, store, cov_km, overflights):
+  with _BG_LOCK:
+    if ("traffic", key) in _BG["logo"]:
+      return False
+    _BG["logo"].add(("traffic", key))
+  _spawn(_traffic_job, key, bearer, radius_km, store, cov_km if cov_km else radius_km, overflights)
+  return True
+
+
+def fetch_states(bearer, radius_km=NEAR_KM, allow_stale=False, store=None, cov_km=None,
+                 overflights=False, block=True):
+  """(states, durum_mesajı, epoch). FETCH_TTL sn önbellek.
+  allow_stale=True iken (sayfa geçişi) eski ama başarılı veri beklemeden verilir, tazesi arka planda çekilir.
+  block=False iken veri hiç yoksa BEKLEMEZ: arka planda başlatır ve ([], "loading", ...) döndürür."""
   key = (bearer, radius_km)
   hit = _TCACHE.get(key)
   now = time.time()
@@ -598,21 +627,11 @@ def fetch_states(bearer, radius_km=NEAR_KM, allow_stale=False):
     if age < FETCH_TTL:
       return hit[1]
     if allow_stale and age < STALE_OK_S and hit[1][1] == "ok":
-      with _BG_LOCK:
-        busy = ("traffic", key) in _BG["logo"]
-        _BG["logo"].add(("traffic", key))
-
-      def work():
-        try:
-          _TCACHE[key] = (time.time(), _fetch_states_live(bearer, radius_km))
-        except Exception:
-          pass
-        finally:
-          with _BG_LOCK:
-            _BG["logo"].discard(("traffic", key))
-      if not busy:
-        _spawn(work)
+      _start_traffic_job(key, bearer, radius_km, store, cov_km, overflights)
       return hit[1]
+  elif not block:
+    _start_traffic_job(key, bearer, radius_km, store, cov_km, overflights)
+    return [], "loading", now
   res = _fetch_states_live(bearer, radius_km)
   _TCACHE[key] = (time.time(), res)
   return res
@@ -729,6 +748,29 @@ def lookup_photo(icao24, store):
   return cached(store, ("photo", icao24), 86400, 300, go)
 
 
+def peek_photo(icao24, store):
+  """Beklemeden yedek fotoğraf: önbellekte varsa verir; yoksa arka planda arar. (foto, bekliyor_mu)"""
+  ck = ("photo", icao24)
+  hit = store.get(ck)
+  if hit and hit[0] > time.time():
+    return hit[1], False
+  with _BG_LOCK:
+    if ck in _BG["logo"]:
+      return None, True
+    _BG["logo"].add(ck)
+
+  def work():
+    try:
+      lookup_photo(icao24, store)
+    except Exception:
+      pass
+    finally:
+      with _BG_LOCK:
+        _BG["logo"].discard(ck)
+  _spawn(work)
+  return None, True
+
+
 def fetch_logo(key, iata, store):
   """Önce assets/logos/<KEY>.*, yoksa internetten indirip base64 olarak gömer."""
   def go():
@@ -752,8 +794,31 @@ def fetch_logo(key, iata, store):
   return cached(store, ("logo", key, iata), 7 * 86400, 3600, go)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+_WX = {"val": None, "t": 0.0, "busy": False}
+WX_TTL_S = 600
+
+
 def fetch_weather():
+  """Beklemeden hava durumu: eldeki değeri hemen verir, süresi dolduysa arka planda tazeler."""
+  now = time.time()
+  if now - _WX["t"] > WX_TTL_S:
+    with _BG_LOCK:
+      busy = _WX["busy"]
+      _WX["busy"] = True
+    if not busy:
+      def work():
+        try:
+          v = _fetch_weather_raw()
+          if v:
+            _WX["val"] = v
+          _WX["t"] = time.time() if v else time.time() - WX_TTL_S + 60   # hata: 1 dk sonra tekrar dene
+        finally:
+          _WX["busy"] = False
+      _spawn(work)
+  return _WX["val"]
+
+
+def _fetch_weather_raw():
   try:
     r = requests.get(
         "https://api.open-meteo.com/v1/forecast",
@@ -868,9 +933,11 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
   cands = _candidates(states, overflights, coverage_km)
   callsigns = sorted({(c[0][1] or "").strip() for c in cands} - {""})
   hexes = sorted({c[0][0] for c in cands})
-  with ThreadPoolExecutor(ENRICH_WORKERS) as pool:
-    routes = dict(zip(callsigns, pool.map(lambda c: lookup_route(c, store), callsigns)))
-    acs = dict(zip(hexes, pool.map(lambda h: lookup_aircraft(h, store), hexes)))
+  with ThreadPoolExecutor(ENRICH_WORKERS) as pool:   # rota ve uçak sorguları aynı anda
+    f_r = [pool.submit(lookup_route, c, store) for c in callsigns]
+    f_a = [pool.submit(lookup_aircraft, h, store) for h in hexes]
+    routes = dict(zip(callsigns, (f.result() for f in f_r)))
+    acs = dict(zip(hexes, (f.result() for f in f_a)))
 
   flights = []
   for s, alt_ft, kind, d_air in cands:
@@ -956,31 +1023,20 @@ def _spawn(fn, *args):
 
 _WARM = {"t": 0.0, "busy": False}
 WARM_EVERY_S = 25
+COLD_NONBLOCK = True   # veri hiç yokken radar sayfası beklemez: boş harita + 'yükleniyor', veri gelince dolar
 
 
 def warm_radar(store, bearer, cov_km):
   """Radar dışındaki sayfalardayken (ör. açılış sayfası Terminal) trafik verisini, rota ve uçak
-  kayıtlarını arka planda ısıtır: Radar sekmesine geçildiğinde hepsi hazır olur."""
+  kayıtlarını, hava durumunu arka planda ısıtır: Radar sekmesine geçildiğinde hepsi hazır olur."""
   now = time.time()
+  hit = _TCACHE.get((bearer, cov_km))
   with _BG_LOCK:
-    if _WARM["busy"] or now - _WARM["t"] < WARM_EVERY_S:
+    if now - _WARM["t"] < WARM_EVERY_S or (hit and now - hit[0] < WARM_EVERY_S):
       return
-    _WARM["busy"] = True
     _WARM["t"] = now
-
-  def work():
-    try:
-      res = _fetch_states_live(bearer, cov_km)
-      _TCACHE[(bearer, cov_km)] = (time.time(), res)
-      if res[1] == "ok":
-        fl = build_flights(res[0], store, False, cov_km, True)
-        attach_logos(fl, store)
-    except Exception:
-      pass
-    finally:
-      with _BG_LOCK:
-        _WARM["busy"] = False
-  _spawn(work)
+  fetch_weather()
+  _start_traffic_job((bearer, cov_km), bearer, cov_km, store, cov_km, False)
 
 
 def join_background(timeout=10):
@@ -1141,11 +1197,12 @@ def eta_text(f):
 
 
 def topbar_html(weather, now, counts, mode, status):
-  dot = {"live": "live", "demo": "demo"}.get(mode, "err")
-  label = {"live": "Canlı", "demo": "Demo", "err": "Bağlantı yok"}.get(mode, "Canlı")
+  dot = {"live": "live", "demo": "demo", "loading": "demo"}.get(mode, "err")
+  label = {"live": "Canlı", "demo": "Demo", "loading": "Yükleniyor", "err": "Bağlantı yok"}.get(mode, "Canlı")
   w = (f"<span class='chip'>{weather['emoji']} <b>{weather['temp']}°C</b> · {esc(weather['text'])}"
        f" · 💨 {weather['wind']} km/sa</span>") if weather else ""
-  warn = f"<span class='chip'>⚠️ {esc(status)}</span>" if status not in ("ok", "") else ""
+  warn = (f"<span class='chip'>⚠️ {esc(status)}</span>" if status not in ("ok", "", "loading")
+          else ("<span class='chip'>⏳ Uçak verisi yükleniyor…</span>" if status == "loading" else ""))
   trn = f" · ➡ {counts['trn']}" if counts["trn"] else ""
   hid = (f"<span class='chip' title='Rotası bilinmeyen uçaklar listede ve haritada gösterilmiyor (⚙️ ile açılabilir)'>"
          f"🙈 <b>{counts['hidden']}</b></span>") if counts.get("hidden") else ""
@@ -1418,8 +1475,9 @@ import re  # noqa: E402
 
 PAGES = ["🛰️ Radar", "🛫 Terminal", "📒 Gözlem Defteri"]
 DEFAULT_PAGE = PAGES[1]      # açılışta Terminal: veritabanından anında dolar, Radar sekmeye geçince yüklenir
-APP_VERSION = "v0.3.13"
+APP_VERSION = "v0.3.14"
 CHANGELOG = [
+    ("v0.3.14", "Açılış hızlandı: GitHub verisi, hava durumu ve uçak fotoğrafı arka planda; performans testleri"),
     ("v0.3.13", "Radar önceden ısıtılır: Terminal açıkken trafik/rota/uçak verisi arka planda hazırlanır"),
     ("v0.3.12", "Sürüm izi; havalimanı kodu açıklaması"),
     ("v0.3.11", "Açılışta Terminal; 'Şimdi' görünümü (−60/+30 dk)"),
@@ -1639,7 +1697,7 @@ def apply_home_override():
 @st.cache_resource(show_spinner=False)
 def get_db():
   """Tek veritabanı nesnesi (tüm oturumlar için). İlk çağrıda `data` dalından çeker."""
-  return radar_db.open_db(lambda k, d="": str(secret(k, d)))
+  return radar_db.open_db(lambda k, d="": str(secret(k, d)), background=True)
 
 
 def page_radar(db, store, demo, refresh_s_box):
@@ -1711,14 +1769,20 @@ def page_radar(db, store, demo, refresh_s_box):
     fetch_km = max(cov_km, ovf_km + 12) if overflights else cov_km  # ev havalimanından ~9 km uzakta
     t1 = time.time()
     states, status, fetched = fetch_states(get_bearer(), fetch_km,
-                                           allow_stale=bool(ss.get("_switched")))
+                                           allow_stale=bool(ss.get("_switched")),
+                                           store=store, cov_km=cov_km, overflights=overflights,
+                                           block=(not COLD_NONBLOCK) or bool(ss.get("_radar_seen")))
+    if status == "loading":
+      refresh_s_box[-1] = 2          # veri gelince hemen çiz (boş harita + "yükleniyor" göster)
+    elif status == "ok":
+      ss["_radar_seen"] = True
     tm["veri"] = time.time() - t1
     raw_n = len(states)
     t1 = time.time()
     all_flights = attach_logos(
         build_flights(states, store, overflights, cov_km, show_unknown, bstats), store)
     tm["uçaklar"] = time.time() - t1
-    mode = "live" if status == "ok" else "err"
+    mode = "live" if status == "ok" else ("loading" if status == "loading" else "err")
     runway = infer_runway(states, wind_dir)
   updated = datetime.fromtimestamp(fetched, TZ).strftime("%H:%M:%S")
 
@@ -1821,7 +1885,9 @@ def page_radar(db, store, demo, refresh_s_box):
     with col_panel:
       selected = next((f for f in flights if f["id"] == ss["sel"]), None)
       if selected and not selected["photo"] and not demo:  # fotoğraf yoksa yedek kaynak
-        ph = lookup_photo(selected["id"], store)
+        ph, ph_pending = peek_photo(selected["id"], store)
+        if ph_pending:
+          refresh_s_box[-1] = min(refresh_s_box[-1], 4)   # foto gelince hemen göster
         if ph:
           selected = {**selected, "photo": ph["src"], "photo_credit": ph.get("credit", "")}
       st.markdown(detail_html(selected), unsafe_allow_html=True)
@@ -1871,13 +1937,16 @@ def page_terminal(db, store, demo, refresh_s_box):
     monthly = fids.DEFAULT_MONTHLY_UNITS
 
   t0 = time.time()
-  if not demo and key and db.meta_get("fids_parser") != APP_VERSION:
+  syncing = not db.sync_done.is_set()          # GitHub'dan kayıtlı veri hâlâ geliyor
+  if syncing:
+    refresh_s_box[-1] = 2                       # gelince hemen göster
+  if not demo and key and not syncing and db.meta_get("fids_parser") != APP_VERSION:
     db.meta_set(fids_parser=APP_VERSION)
     if not db.fids_between("DEP", fids.to_iso(now - timedelta(hours=1)), fids.to_iso(now + timedelta(hours=12))):
       with st.spinner("Tarife yeni biçimle çekiliyor…"):
         fids.refresh(db, key, now, host=host, monthly_units=monthly, force=True)
       db.maybe_push()
-  if not demo and key:
+  if not demo and key and not syncing:
     bs0 = fids.budget_state(db, now, monthly)
     due, _why = fids.due_for_refresh(db, now, bs0)
     if due:
@@ -1939,6 +2008,8 @@ def page_terminal(db, store, demo, refresh_s_box):
              "Arayüzü denemek için üstteki <b>Demo modu</b>nu açabilirsiniz.")
   elif not demo and query.strip():
     empty = "<div class='big'>🔍</div>Aramanızla eşleşen uçuş yok."
+  elif not demo and syncing:
+    empty = "<div class='big'>⏳</div>Kayıtlı tarife yükleniyor…"
   elif not demo:
     empty = ("<div class='big'>🛩️</div>Önümüzdeki saatler için kayıtlı uçuş yok."
              + (f"<br><small>{esc(res['error'])}</small>" if res.get("error") else ""))

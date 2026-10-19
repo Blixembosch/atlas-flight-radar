@@ -158,18 +158,25 @@ class Resp:
 class Net:
     states = []; routes = {}; route_err = set(); fail_opensky = False
     aircraft = {}; adb_status = 200; adb_json = None; gh = None
-    os_exc = None; adsb = None; adb_delay = 0; logo_delay = 0; os_delay = 0
+    os_exc = None; adsb = None; adb_delay = 0; logo_delay = 0; os_delay = 0; lat = {}
     calls = {"opensky": 0, "adb": 0, "github": 0, "adsbdb": 0, "adsblol": 0}
     log = []     # (url) tüm istekler
     @classmethod
     def reset(cls):
         cls.states = []; cls.routes = {}; cls.route_err = set(); cls.fail_opensky = False
         cls.aircraft = {}; cls.adb_status = 200; cls.adb_json = None; cls.gh = None
-        cls.os_exc = None; cls.adsb = None; cls.adb_delay = 0; cls.logo_delay = 0; cls.os_delay = 0
+        cls.os_exc = None; cls.adsb = None; cls.adb_delay = 0; cls.logo_delay = 0; cls.os_delay = 0; cls.lat = {}
         cls.calls = {"opensky": 0, "adb": 0, "github": 0, "adsbdb": 0, "adsblol": 0}; cls.log = []
+
+def _lat(kind):
+    d = Net.lat.get(kind, 0)
+    if d: time.sleep(d)
 
 def rget(url, params=None, headers=None, timeout=None, **kw):
     Net.log.append(url)
+    for k, kind in (("api.adsb.lol", "adsblol"), ("/callsign/", "adsbdb"), ("/aircraft/", "aircraft"),
+                    ("planespotters", "photo"), ("open-meteo", "meteo")):
+        if k in url: _lat(kind)
     if "opensky-network.org/api/states" in url:
         Net.calls["opensky"] += 1
         if Net.os_delay: time.sleep(Net.os_delay)
@@ -203,7 +210,7 @@ def rget(url, params=None, headers=None, timeout=None, **kw):
 def rrequest(method, url, **kw):
     Net.log.append(url)
     if "api.github.com" in url:
-        Net.calls["github"] += 1
+        Net.calls["github"] += 1; _lat("github")
         return Net.gh.request(method, url, **kw)
     raise AssertionError("beklenmeyen istek " + url)
 
@@ -215,14 +222,17 @@ sys.modules["requests"] = rq
 import radar_db
 _orig_open = radar_db.open_db
 DBDIR = tempfile.mkdtemp()
-def _open(secret, path=None, http=None):
-    return _orig_open(secret, path=os.path.join(DBDIR, "radar.db"), http=http)
+BG_SYNC = {"on": False}          # performans testleri gerçek (arka plan) açılışı dener
+def _open(secret, path=None, http=None, background=False):
+    return _orig_open(secret, path=os.path.join(DBDIR, "radar.db"), http=http,
+                      background=background and BG_SYNC["on"])
 radar_db.open_db = _open
 
 FETCH_TTL_TEST = 0
 spec = importlib.util.spec_from_file_location("radar", os.path.join(PROJ, "Radar.py"))
 radar = importlib.util.module_from_spec(spec); spec.loader.exec_module(radar)
 radar.DEFAULT_PAGE = radar.PAGES[0]   # mevcut testler Radar ile başlar; varsayılan ayrıca test edilir
+radar.COLD_NONBLOCK = False   # eski testler ilk çizimde veriyi bekler; performans testleri gerçek davranışı dener
 radar.FETCH_TTL = 0   # testlerde her çalıştırmada taze veri
 
 def run():
@@ -256,6 +266,7 @@ def reset_app(secrets=None):
     fake.session_state.clear(); fake.widget_keys = set(); fake.rendered = set()
     fake.secrets = dict(secrets or {}); fake.refresh = None; fake.pressed = set(); fake.reruns = 0
     radar.get_db.memo.clear(); radar.get_store.memo.clear(); radar._TCACHE.clear(); radar._BG["logo"].clear()
+    radar._WX.update(val=None, t=0.0, busy=False); radar._WARM.update(t=0.0, busy=False)
     for k in list(radar.__dict__.get("_x", {})): pass
     SF.calls.clear(); SF.click_for_key.clear()
 
