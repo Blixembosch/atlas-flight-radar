@@ -48,9 +48,9 @@ def sel_markers():
 def panel():
     return next((h for h in reversed(fake.md) if "class='panel'" in h), "")
 
-# 1) ilk açılış
+# 1) ilk açılış (Radar sayfası testi)
 run()
-set_ss("Şifre", "gizli"); fake.pressed = {"Giriş yap"}; run()
+set_ss("page", radar.PAGES[1]); set_ss("Şifre", "gizli"); fake.pressed = {"Giriş yap"}; run()
 labels = [mk.k["tooltip"] for mk in SF.calls[-1][0].markers()]
 check("ilk çalıştırma hatasız, uçaklar haritada", len(labels) == 3, labels)   # DLH958 kapalı, rotasız a5 gizli
 check("geçiş uçağı anahtar kapalıyken yok", "DLH958" not in labels)

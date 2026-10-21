@@ -10,8 +10,9 @@ def ck(n, c, i=""):
 def set_ss(k, v): fake.session_state._force(k, v)
 def md(): return "\n".join(fake.md)
 P = radar.PAGES
-def start(secrets):
+def start(secrets, payload=None):
     H.reset_app(secrets); Net.gh = None
+    if payload is not None: Net.adb_json = payload
     H.run(); set_ss("Şifre", "p"); fake.pressed = {"Giriş yap"}; H.run()
 S = {"APP_PASSWORD": "p", "AERODATABOX_KEY": "secret-key-xyz"}
 
@@ -23,11 +24,11 @@ def flatify(js):
             mv["scheduledTimeLocal"] = mv.pop("scheduledTime")["local"]
             if "revisedTime" in mv: mv["revisedTimeLocal"] = mv.pop("revisedTime")["local"]
     return js
-start(S); Net.adb_json = flatify(adb_payload()); set_ss("page", P[1]); set_ss("fids_view", "Tüm gün"); H.run()
+start(S, payload=flatify(adb_payload())); set_ss("page", P[0]); set_ss("fids_view", "Tüm gün"); H.run()
 ck("düz biçimli yanıttan 20+20 satır", md().count("class='frow") == 40, md().count("class='frow"))
 
 # 2) boş 200: sebep ekranda, tanı görünür, anahtar yok
-start(S); Net.adb_json = {"departures": [], "arrivals": []}; set_ss("page", P[1]); set_ss("fids_view", "Tüm gün"); H.run()
+start(S); Net.adb_json = {"departures": [], "arrivals": []}; set_ss("page", P[0]); set_ss("fids_view", "Tüm gün"); H.run()
 m = md()
 ck("boş yanıt: açıklama ekranda", "uçuş döndürmedi" in m)
 ck("boş yanıt: yalnızca 1 çağrı", Net.calls["adb"] == 1, Net.calls["adb"])

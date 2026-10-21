@@ -1740,11 +1740,12 @@ def build_map(flights, sel_id, cov_km=NEAR_KM, view_km=35, view=None):
 # =============================================================================
 import re  # noqa: E402
 
-PAGES = ["🛰️ Radar", "🛫 Terminal", "📒 Gözlem Defteri"]
-DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Radar: bahçede uçak duyunca anında görünsün
-APP_VERSION = "v0.4.0"
+PAGES = ["🛫 Terminal", "🛰️ Radar", "📒 Gözlem Defteri"]
+DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Terminal tarifesi: hızlı ve kilitlenmesiz
+APP_VERSION = "v0.4.1"
 CHANGELOG = [
-    ("v0.4.0", "Baba-oğul sürümü: açılışta doğrudan Radar, Gökyüzü Pusulası, sesli bahçe uyarısı, Terminal-Radar rota birleştirme, Avcı Rozetleri ve sıfır bloklamalı yenileme"),
+    ("v0.4.1", "Açılışta doğrudan Terminal, Radar ikinci sırada; Terminal ilk açılışta sıfır bloklamalı (asenkron) yükleme"),
+    ("v0.4.0", "Baba-oğul sürümü: Gökyüzü Pusulası, sesli bahçe uyarısı, Terminal-Radar rota birleştirme, Avcı Rozetleri ve sıfır bloklamalı yenileme"),
     ("v0.3.14", "Açılış hızlandı: GitHub verisi, hava durumu ve uçak fotoğrafı arka planda; performans testleri"),
     ("v0.3.13", "Radar önceden ısıtılır: Terminal açıkken trafik/rota/uçak verisi arka planda hazırlanır"),
     ("v0.3.12", "Sürüm izi; havalimanı kodu açıklaması"),
@@ -2297,11 +2298,13 @@ def page_terminal(db, store, demo, refresh_s_box):
     bs0 = fids.budget_state(db, now, monthly)
     due, _why = fids.due_for_refresh(db, now, bs0)
     if due:
-      if fids.data_age_min(db, now) is None:      # hiç veri yok: ilk seferde bekle
+      if fids.data_age_min(db, now) is None and not COLD_NONBLOCK:
         with st.spinner("Tarife yükleniyor…"):
           fids.refresh(db, key, now, host=host, monthly_units=monthly)
         db.maybe_push()
-      else:                                      # veri var: arka planda güncelle, ekranı bekletme
+      else:
+        # Veri olsun veya olmasın: arka planda güncelle, ekranı asla dondurma
+        refresh_s_box[-1] = 2  # ilk veri gelince hızlıca ekranı tazele
         def _bg():
           fids.refresh(db, key, fids.now_local(), host=host, monthly_units=monthly)
           db.maybe_push()
@@ -2355,8 +2358,8 @@ def page_terminal(db, store, demo, refresh_s_box):
              "Arayüzü denemek için üstteki <b>Demo modu</b>nu açabilirsiniz.")
   elif not demo and query.strip():
     empty = "<div class='big'>🔍</div>Aramanızla eşleşen uçuş yok."
-  elif not demo and syncing:
-    empty = "<div class='big'>⏳</div>Kayıtlı tarife yükleniyor…"
+  elif not demo and (syncing or age is None):
+    empty = "<div class='big'>⏳</div>Tarife yükleniyor… Sayfa birkaç saniye içinde güncellenecektir."
   elif not demo:
     empty = ("<div class='big'>🛩️</div>Önümüzdeki saatler için kayıtlı uçuş yok."
              + (f"<br><small>{esc(res['error'])}</small>" if res.get("error") else ""))
@@ -2471,12 +2474,12 @@ def main():
   st.session_state["_switched"] = st.session_state.get("_last_page") != page
   st.session_state["_last_page"] = page
   box = []
-  if page != PAGES[0] and not demo:
+  if page != "🛰️ Radar" and not demo:
     _cov = st.session_state.get("f_cov")
     warm_radar(store, get_bearer(), COVERAGE[_cov if _cov in COVERAGE else list(COVERAGE)[0]][0])
-  elif page == PAGES[0] and not demo and COLD_NONBLOCK:
+  elif page == "🛰️ Radar" and not demo and COLD_NONBLOCK:
     warm_terminal(db)
-  fn = {PAGES[0]: page_radar, PAGES[1]: page_terminal, PAGES[2]: page_diary}[page]
+  fn = {"🛫 Terminal": page_terminal, "🛰️ Radar": page_radar, "📒 Gözlem Defteri": page_diary}[page]
   fn(db, store, demo, box)
 
   with st.popover(f"ℹ️ {APP_VERSION}"):

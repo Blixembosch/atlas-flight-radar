@@ -29,7 +29,7 @@ BUDGET_PAINT = 0.35          # bir çizimin en fazla süresi (sn): yavaş çağr
 BUDGET_PAINT_STEADY = 0.25
 
 def setup(github_rows=True, opensky_down=True):
-    radar.DEFAULT_PAGE = P[1]
+    radar.DEFAULT_PAGE = P[0]   # Terminal varsayılan açılış sayfası
     radar.COLD_NONBLOCK = True; radar.FETCH_TTL = 8
     H.BG_SYNC["on"] = True
     H.reset_app({"APP_PASSWORD": "p", "AERODATABOX_KEY": "k", "GITHUB_TOKEN": "t", "GITHUB_REPO": "o/r"})
@@ -89,7 +89,7 @@ ck(f"Terminal tekrar çizimi hızlı ({dt:.2f} sn)", dt < BUDGET_PAINT_STEADY, d
 print("== 2) Terminal'den Radar'a geçiş")
 radar.join_background(timeout=20)
 n_calls = dict(Net.calls)
-set_ss("page", P[0]); dt = timed("Terminal → Radar (ısınmış)")
+set_ss("page", P[1]); dt = timed("Terminal → Radar (ısınmış)")
 ck(f"ısınmış Radar çizimi hızlı ({dt:.2f} sn)", dt < BUDGET_PAINT_STEADY, dt)
 ck("haritada 15 uçak var", len(SF.calls[-1][0].markers()) >= 15, len(SF.calls[-1][0].markers()))
 ck("geçişte yeni ağ çağrısı yok", all(Net.calls[k] == n_calls[k] for k in ("opensky", "adsblol", "adsbdb")), (n_calls, dict(Net.calls)))
@@ -102,7 +102,7 @@ setup()
 login(); wait_sync()
 radar._TCACHE.clear(); radar._WARM.update(t=0.0, busy=False); radar._BG["logo"].clear(); radar._WX.update(val=None, t=0.0, busy=False)
 radar.get_store().clear()
-set_ss("page", P[0]); t0 = time.time(); dt = timed("Radar soğuk ilk çizim")
+set_ss("page", P[1]); t0 = time.time(); dt = timed("Radar soğuk ilk çizim")
 ck(f"soğuk Radar ilk çizimi beklemez ({dt:.2f} sn)", dt < BUDGET_PAINT, dt)
 ck("'yükleniyor' bilgisi görünür", "yükleniyor" in md().lower())
 ck("kısa yenileme (≤3 sn) ile veriyi hemen çeker", fake.refresh is not None and fake.refresh <= 3000, fake.refresh)
@@ -119,7 +119,7 @@ setup()
 login(); wait_sync()
 radar._TCACHE.clear(); radar._WX.update(val=None, t=0.0, busy=False); radar.get_store().clear()
 Net.lat["meteo"] = 3.0 * SCALE; Net.lat["photo"] = 3.0 * SCALE
-set_ss("page", P[0]); timed(); radar.join_background(timeout=20)
+set_ss("page", P[1]); timed(); radar.join_background(timeout=20)
 t = time.time(); H.run(); dt = time.time() - t
 ck(f"hava durumu 3 sn gecikmeli iken çizim beklemez ({dt:.2f} sn)", dt < BUDGET_PAINT, dt)
 ck("fotoğraf servisi yavaşken çizim beklemez", dt < BUDGET_PAINT, dt)

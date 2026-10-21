@@ -9,10 +9,13 @@ def chk(name, cond):
     print(("OK   " if cond else "FAIL ") + name)
     if not cond: fails.append(name)
 
-# 1) Varsayılan sayfa Radar (PAGES[0])
+# 1) Varsayılan sayfa Terminal (PAGES[0] = 🛫 Terminal)
 H.reset_app({"APP_PASSWORD": "p", "AERODATABOX_KEY": "k"})
 H.run(); fake.session_state._force("Şifre", "p"); fake.pressed = {"Giriş yap"}; H.run()
-chk("uygulama doğrudan Radar ile açılır", fake.session_state["page"] == radar.PAGES[0])
+chk("uygulama doğrudan Terminal ile açılır", fake.session_state["page"] == radar.PAGES[0] and fake.session_state["page"] == "🛫 Terminal")
+fake.session_state._force("page", "🛰️ Radar")
+H.run()
+chk("Radar sayfasına geçiş çalışır", fake.session_state["page"] == "🛰️ Radar")
 
 # 2) URL anahtarı (?k=...) ile şifresiz otomatik giriş
 H.reset_app({"APP_PASSWORD": "p", "AERODATABOX_KEY": "k"})
@@ -62,6 +65,7 @@ db2.upsert_fids([{
     "sched_local": now_iso, "est_local": now_iso, "actual_local": None,
     "status": "Approaching", "terminal": "1", "gate": "A2", "aircraft": "B738", "reg": "PH-HXA",
 }], now_iso)
+fake.session_state._force("page", "🛰️ Radar")
 fake.session_state._force("f_sound", True)
 H.run()
 html_out = "\n".join(fake.md)

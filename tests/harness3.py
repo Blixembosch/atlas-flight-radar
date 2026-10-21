@@ -234,7 +234,7 @@ radar_db.open_db = _open
 FETCH_TTL_TEST = 0
 spec = importlib.util.spec_from_file_location("radar", os.path.join(PROJ, "Radar.py"))
 radar = importlib.util.module_from_spec(spec); spec.loader.exec_module(radar)
-radar.DEFAULT_PAGE = radar.PAGES[0]   # mevcut testler Radar ile başlar; varsayılan ayrıca test edilir
+radar.DEFAULT_PAGE = radar.PAGES[0]   # açılış sayfası: Terminal (PAGES[0])
 radar.COLD_NONBLOCK = False   # eski testler ilk çizimde veriyi bekler; performans testleri gerçek davranışı dener
 radar.FETCH_TTL = 0   # testlerde her çalıştırmada taze veri
 
