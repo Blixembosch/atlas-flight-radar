@@ -307,13 +307,14 @@ class RadarDB:
     self.write_seq = 0
     self.last_push = 0.0
     self.last_push_ok = 0.0
+    self._meta_cache = {}
+    self._fids_map_cache = (-1, "", "", {})
     self.init_schema()
 
   # ---- bağlantı
   def connect(self):
     con = sqlite3.connect(str(self.path), timeout=15, check_same_thread=False)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=DELETE")  # tek dosya: GitHub'a yüklemek kolay
     return con
 
   @contextmanager
@@ -334,21 +335,33 @@ class RadarDB:
 
   def init_schema(self):
     with self.tx(write=False) as con:
+      con.execute("PRAGMA journal_mode=DELETE")  # tek dosya: GitHub'a yüklemek kolay
       con.executescript(SCHEMA)
       con.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)",
                   (str(SCHEMA_VERSION),))
+      self._meta_cache = {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM meta")}
+      self._fids_map_cache = (-1, "", "", {})
 
   # ---- meta
   def meta_get(self, key, default=None):
+    with self.lock:
+      if key in self._meta_cache:
+        val = self._meta_cache[key]
+        return val if val is not None else default
     with self.tx(write=False) as con:
       row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-    return row["value"] if row else default
+      if row:
+        self._meta_cache[key] = row["value"]
+        return row["value"]
+    return default
 
   def meta_set(self, **kv):
     with self.tx() as con:
       for k, v in kv.items():
+        val = None if v is None else str(v)
         con.execute("INSERT INTO meta(key, value) VALUES(?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, None if v is None else str(v)))
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, val))
+        self._meta_cache[k] = val
 
   # ---- tarife
   def upsert_fids(self, rows, now_iso):
@@ -377,6 +390,33 @@ class RadarDB:
           "SELECT *, updated_at FROM fids_flights WHERE direction=? AND sched_local BETWEEN ? AND ? "
           "ORDER BY sched_local", (direction, from_iso, to_iso))
       return [dict(r) for r in cur.fetchall()]
+
+  def fids_lookup_map(self, from_iso, to_iso):
+    """Canlı radardaki uçakları Eindhoven Terminal tarifesiyle (çağrı kodu, uçuş no, tescil) eşleştirir."""
+    with self.lock:
+      seq, f0, t0, cached_map = self._fids_map_cache
+      if seq == self.write_seq and f0 == from_iso and t0 == to_iso:
+        return cached_map
+    with self.tx(write=False) as con:
+      cur = con.execute(
+          "SELECT * FROM fids_flights WHERE sched_local BETWEEN ? AND ? ORDER BY sched_local",
+          (from_iso, to_iso))
+      rows = [dict(r) for r in cur.fetchall()]
+    by_cs, by_num, by_reg = {}, {}, {}
+    for r in rows:
+      cs = (r.get("callsign") or "").strip().upper().replace(" ", "")
+      num = (r.get("number") or "").strip().upper().replace(" ", "")
+      reg = (r.get("reg") or "").strip().upper().replace("-", "").replace(" ", "")
+      if cs:
+        by_cs[cs] = r
+      if num:
+        by_num[num] = r
+      if reg:
+        by_reg[reg] = r
+    out = {"cs": by_cs, "num": by_num, "reg": by_reg, "rows": rows}
+    with self.lock:
+      self._fids_map_cache = (self.write_seq, from_iso, to_iso, out)
+    return out
 
   def prune(self, before_iso):
     """Eski tarife kayıtlarını ve eski çekme günlüklerini temizler."""
@@ -439,6 +479,12 @@ class RadarDB:
           "week": one("SELECT COUNT(*) FROM sightings WHERE day>=?", week_from),
           "total": one("SELECT COUNT(*) FROM sightings"),
           "days": one("SELECT COUNT(DISTINCT day) FROM sightings"),
+          "unique_airlines": one("SELECT COUNT(DISTINCT airline) FROM sightings WHERE COALESCE(airline,'') NOT IN ('','Bilinmiyor')"),
+          "unique_types": one("SELECT COUNT(DISTINCT type_name) FROM sightings WHERE COALESCE(type_name,'') NOT IN ('','Bilinmiyor')"),
+          "unique_origins": one("SELECT COUNT(DISTINCT COALESCE(origin_iata, dest_iata)) FROM sightings WHERE COALESCE(origin_iata, dest_iata, '')<>''"),
+          "closest_km": one("SELECT MIN(min_dist_km) FROM sightings WHERE min_dist_km IS NOT NULL"),
+          "min_alt_ft": one("SELECT MIN(max_alt_ft) FROM sightings WHERE max_alt_ft IS NOT NULL AND max_alt_ft > 0"),
+          "max_in_day": one("SELECT COALESCE(MAX(c), 0) FROM (SELECT COUNT(*) c FROM sightings GROUP BY day)"),
       }
       r = con.execute("SELECT airline, COUNT(*) c FROM sightings WHERE COALESCE(airline,'')<>'' "
                       "GROUP BY airline ORDER BY c DESC, airline LIMIT 1").fetchone()
@@ -530,6 +576,8 @@ class RadarDB:
             con.execute("INSERT OR IGNORE INTO meta(key, value) SELECT key, value FROM r.meta")
           con.commit()
           con.execute("DETACH DATABASE r")
+          self._meta_cache = {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM meta")}
+          self._fids_map_cache = (-1, "", "", {})
         finally:
           con.close()
     finally:

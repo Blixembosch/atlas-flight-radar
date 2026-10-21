@@ -1,9 +1,9 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.3.11)
-  * Radar        : harita + detay paneli (rotası bilinmeyen uçaklar gizlenir)
+Atlas'ın Uçak Gözlem Kulesi  (v0.4.0)
+  * Radar        : harita + detay paneli + gökyüzü pusulası + sesli bahçe uyarısı + FIDS füzyonu
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
-  * Gözlem Defteri: bahçeden görülen uçaklar (SQLite, GitHub `data` dalında yedeklenir)
-  * Açılışta şifre (APP_PASSWORD)
+  * Gözlem Defteri: bahçeden görülen uçaklar + Uçak Avcısı rozetleri (SQLite, GitHub `data` dalında yedeklenir)
+  * Açılışta şifre (APP_PASSWORD) ve ?k= yer imi anahtarı
 
 Kurulum:
     pip install -r requirements.txt
@@ -104,9 +104,24 @@ OPENSKY_TOKEN_URL = (
 )
 ADSBDB = "https://api.adsbdb.com/v0"
 ADSBLOL_URL = "https://api.adsb.lol/v2/point/{lat}/{lon}/{nm}"  # ücretsiz, anahtarsız yedek kaynak
-OPENSKY_TIMEOUT = 5
-OPENSKY_DOWN_S = 600  # OpenSky ulaşılamazsa bu süre boyunca yedek kaynak önce denenir
+OPENSKY_TIMEOUT = 3.5
+OPENSKY_DOWN_S = 900  # OpenSky ulaşılamazsa bu süre boyunca yedek kaynak önce denenir
 _SRC = {"os_down_until": 0.0, "last_source": ""}  # sunucu geneli kaynak durumu
+_HTTP_SESSION = requests.Session() if hasattr(requests, "Session") else None
+
+
+def _http_get(url, **kw):
+  """Üretimde kalıcı TCP/TLS oturumu (requests.Session) kullanır; testlerde sahte requests.get ile uyumludur."""
+  if _HTTP_SESSION is not None and getattr(requests.get, "__module__", "").startswith("requests"):
+    return _HTTP_SESSION.get(url, **kw)
+  return requests.get(url, **kw)
+
+
+def _http_post(url, **kw):
+  if _HTTP_SESSION is not None and getattr(requests.post, "__module__", "").startswith("requests"):
+    return _HTTP_SESSION.post(url, **kw)
+  return requests.post(url, **kw)
+
 
 # =============================================================================
 # HAVAYOLU VE UÇAK BİLGİLERİ
@@ -114,7 +129,8 @@ _SRC = {"os_down_until": 0.0, "last_source": ""}  # sunucu geneli kaynak durumu
 # Çağrı kodunun ilk 3 harfi -> ortak anahtar
 ALIASES = {
     "TVF": "TRA", "WMT": "WZZ", "WUK": "WZZ", "TFL": "TUI", "TOM": "TUI",
-    "TUY": "TUI", "RUK": "RYR", "KLC": "KLM", "EZS": "EZY", "EJU": "EZY",
+    "TUY": "TUI", "RUK": "RYR", "RYR": "RYR", "KLC": "KLM", "EZS": "EZY",
+    "EJU": "EZY", "CND": "CAI", "CXI": "CAI",
 }
 # anahtar: (ad, arka plan, yazı rengi, IATA kodu)  -> logo bulunamazsa bu rozet çıkar
 AIRLINES = {
@@ -129,53 +145,138 @@ AIRLINES = {
     "THY": ("Turkish Airlines", "#c70a0c", "#ffffff", "TK"),
     "SXS": ("SunExpress", "#ffcc00", "#222222", "XQ"),
     "DLH": ("Lufthansa", "#05164d", "#ffb900", "LH"),
+    "CAI": ("Corendon", "#d91a2a", "#ffffff", "XC"),
+    "FHY": ("Freebird", "#e11d48", "#ffffff", "FH"),
+    "BAW": ("British Airways", "#1e3a8a", "#ffffff", "BA"),
+    "AFR": ("Air France", "#1d4ed8", "#ffffff", "AF"),
+    "SAS": ("SAS", "#0f172a", "#38bdf8", "SK"),
+    "EWG": ("Eurowings", "#831843", "#ffffff", "EW"),
+    "TAP": ("TAP Portugal", "#15803d", "#ffffff", "TP"),
+    "IBE": ("Iberia", "#b91c1c", "#fde047", "IB"),
+    "SWR": ("SWISS", "#dc2626", "#ffffff", "LX"),
+    "AUA": ("Austrian", "#b91c1c", "#ffffff", "OS"),
+    "LOT": ("LOT Polish", "#1e3a8a", "#ffffff", "LO"),
+    "BTI": ("airBaltic", "#65a30d", "#ffffff", "BT"),
+    "NAX": ("Norwegian", "#b91c1c", "#ffffff", "DY"),
 }
+
+# Eindhoven Hava Üssü / Acil Durum / Özel çağrı kodu önekleri (adsbdb'de rotası olmasa bile gizlenmez)
+SPECIAL_PREFIXES = {
+    "NAF": ("Hollanda Kraliyet Hava Kuvvetleri 🪖", "#3f6212", "#ecfccb", "MIL"),
+    "MMF": ("NATO Tanker & Nakliye Filosu (Eindhoven) 🪖", "#3f6212", "#ecfccb", "MIL"),
+    "GAF": ("Alman Hava Kuvvetleri 🪖", "#3f6212", "#ecfccb", "MIL"),
+    "BAF": ("Belçika Hava Kuvvetleri 🪖", "#3f6212", "#ecfccb", "MIL"),
+    "RCH": ("ABD Hava Kuvvetleri (USAF) 🪖", "#3f6212", "#ecfccb", "MIL"),
+    "RRR": ("İngiliz Kraliyet Hava Kuvvetleri 🪖", "#3f6212", "#ecfccb", "MIL"),
+    "LIF": ("Lifeliner Hava Ambulansı 🚁", "#b91c1c", "#fef2f2", "MED"),
+    "ANW": ("ANWB Hava Ambulansı 🚁", "#b91c1c", "#fef2f2", "MED"),
+    "ZXP": ("Hollanda Polis Helikopteri 🚁", "#1d4ed8", "#eff6ff", "POL"),
+}
+SPECIAL_TYPES = {"C130", "C30J", "A400", "C17", "F35", "CH47", "AH64", "NH90", "EC35", "H135", "EC45", "H145", "AW139"}
 
 # ICAO tür kodu -> (ad, tipik koltuk sayısı, çocuklara göre kısa bilgi)
 AIRCRAFT_TYPES = {
-    "B737": ("Boeing 737-700", 149, "737'nin biraz kısa kuzeni."),
-    "B738": ("Boeing 737-800", 189, "Dünyanın en popüler kısa-orta menzilli yolcu uçaklarından."),
-    "B739": ("Boeing 737-900", 190, "737-800'ün biraz uzun hali."),
-    "B38M": ("Boeing 737 MAX 8", 189, "737'nin yeni nesil, daha sessiz modeli."),
-    "B39M": ("Boeing 737 MAX 9", 220, "737 MAX ailesinin uzun üyesi."),
-    "A318": ("Airbus A318", 107, "A320 ailesinin en küçüğü, 'Baby Bus' diye bilinir."),
-    "A319": ("Airbus A319", 140, "A320 ailesinin kısa üyelerinden."),
-    "A320": ("Airbus A320-200", 180, "Geniş kabinli popüler dar gövde uçak."),
-    "A20N": ("Airbus A320neo", 186, "A320'nin yeni, yakıt tasarruflu modeli."),
-    "A321": ("Airbus A321", 220, "A320'nin uzatılmış gövdeli hali."),
-    "A21N": ("Airbus A321neo", 239, "Yeni nesil, uzun menzilli A321."),
-    "E170": ("Embraer 170", 76, "Brezilya yapımı küçük yolcu uçağı."),
-    "E175": ("Embraer 175", 78, "Brezilya yapımı bölgesel yolcu uçağı."),
-    "E190": ("Embraer 190", 100, "Brezilya yapımı, küçük bölgesel yolcu uçağı."),
+    "B737": ("Boeing 737-700", 149, "737 ailesinin çevik ve kısa gövdeli üyesi; kanat uçları yukarı kıvrıktır!"),
+    "B738": ("Boeing 737-800", 189, "Dünyanın en popüler yolcu uçağı! Eindhoven'a en çok inen modeldir."),
+    "B739": ("Boeing 737-900", 190, "737-800'ün uzatılmış abisi; daha fazla bavul ve yolcu taşır."),
+    "B37M": ("Boeing 737 MAX 7", 172, "Yeni nesil 737 MAX ailesinin en kısa ve uzun menzilli üyesi."),
+    "B38M": ("Boeing 737 MAX 8", 189, "737'nin yeni nesil, çok daha sessiz modeli; motorlarının arkası tırtıklıdır!"),
+    "B39M": ("Boeing 737 MAX 9", 220, "737 MAX ailesinin dev gövdeli uzun üyesi."),
+    "A318": ("Airbus A318", 107, "Airbus A320 ailesinin en küçüğü; pilotlar ona 'Bebek Otobüs' (Baby Bus) der!"),
+    "A319": ("Airbus A319", 140, "A320 ailesinin kısa ve çevik üyesi; kısa pistlere bile rahatça iner."),
+    "A320": ("Airbus A320-200", 180, "Pilot koltuğunda direksiyon yerine oyun kolu (sidestick) olan ilk yolcu uçağı!"),
+    "A20N": ("Airbus A320neo", 186, "Devasa yeni motorlarıyla çok az yakıt harcayan, fısıltı kadar sessiz A320!"),
+    "A321": ("Airbus A321", 220, "A320'nin uzatılmış gövdeli hali; neredeyse bir futbol sahasının yarısı boyundadır."),
+    "A21N": ("Airbus A321neo", 239, "Wizz Air ve Transavia'nın yeni gözdesi; tek koridorlu uçakların en büyüğü!"),
+    "BCS1": ("Airbus A220-100", 120, "Büyük pencereli, çok modern ve sessiz bölgesel jet."),
+    "BCS3": ("Airbus A220-300", 145, "Balina sesine benzer ilginç motor sesiyle tanınan yeni nesil Airbus!"),
+    "E170": ("Embraer 170", 76, "Brezilya yapımı çevik yolcu uçağı; orta koltuğu yoktur, herkes cam veya koridordadır!"),
+    "E175": ("Embraer 175", 88, "KLM Cityhopper'ın sık kullandığı Brezilya yapımı bölgesel jet."),
+    "E190": ("Embraer 190", 100, "Brezilya yapımı popüler bölgesel jet; ikişerli koltuk düzeniyle çok rahattır."),
     "E195": ("Embraer 195", 120, "Embraer 190'ın uzun versiyonu."),
-    "AT72": ("ATR 72", 70, "İki pervaneli, kısa mesafe uçağı."),
-    "DH8D": ("Dash 8 Q400", 78, "İki pervaneli, hızlı bölgesel uçak."),
-    "CRJ9": ("Bombardier CRJ-900", 90, "Kuyruğunda motorları olan bölgesel jet."),
-    "B763": ("Boeing 767-300", 220, "Okyanus aşan geniş gövdeli uçak."),
-    "B772": ("Boeing 777-200", 300, "İki motorlu dev yolcu uçağı."),
-    "B77W": ("Boeing 777-300ER", 350, "Dünyanın en büyük iki motorlu uçaklarından."),
-    "B788": ("Boeing 787-8 Dreamliner", 240, "Gövdesi hafif malzemeden, sessiz bir uçak."),
-    "B789": ("Boeing 787-9 Dreamliner", 290, "Dreamliner'ın uzun hali."),
-    "A332": ("Airbus A330-200", 250, "Uzun mesafe geniş gövdeli uçak."),
-    "A333": ("Airbus A330-300", 290, "A330'un uzun versiyonu."),
-    "A359": ("Airbus A350-900", 300, "Yeni nesil, çok sessiz geniş gövdeli uçak."),
-    "A388": ("Airbus A380", 520, "Dünyanın en büyük yolcu uçağı, iki katlı!"),
-    "B744": ("Boeing 747-400", 400, "Üst katıyla ünlü 'Jumbo Jet'."),
+    "E290": ("Embraer E190-E2", 106, "'Kâr Avcısı' lakaplı, kartal kanatlı yeni nesil süper sessiz jet!"),
+    "E295": ("Embraer E195-E2", 132, "KLM'nin yeni kullandığı, dev motorlu Brezilya uçağı."),
+    "AT72": ("ATR 72", 70, "Kanatlarında iki büyük pervanesi olan kısa mesafe yolcu uçağı!"),
+    "AT76": ("ATR 72-600", 72, "Pervaneleri dışarıdan görünür; bulutların arasından pırpır ederek uçar."),
+    "DH8D": ("Dash 8 Q400", 78, "Jet uçakları kadar hızlı uçabilen iki pervaneli süper turboprop!"),
+    "CRJ9": ("Bombardier CRJ-900", 90, "Motorları kanatlarında değil, arka kuyruğunun iki yanındadır!"),
+    "B763": ("Boeing 767-300", 220, "Okyanusları aşan geniş gövdeli uzun yol uçağı."),
+    "B772": ("Boeing 777-200", 300, "Dünyanın en büyük jet motorlarına sahip dev yolcu uçağı!"),
+    "B77W": ("Boeing 777-300ER", 350, "Tek bir motorunun içine bir Boeing 737 gövdesi sığabilir!"),
+    "B788": ("Boeing 787-8 Dreamliner", 240, "Gövdesi karbon fiberden yapılan, uçarken kanatları yay gibi esneyen uçak!"),
+    "B789": ("Boeing 787-9 Dreamliner", 290, "Pencerelerinde güneşlik yerine düğmeyle kararan akıllı camlar vardır!"),
+    "B78X": ("Boeing 787-10 Dreamliner", 330, "Dreamliner ailesinin en uzun üyesi!"),
+    "A332": ("Airbus A330-200 / MRTT", 250, "Eindhoven üssünde havada başka uçaklara yakıt ikmali yapan tanker modelleri de vardır!"),
+    "A333": ("Airbus A330-300", 290, "Kıtalararası uçan çift koridorlu dev Airbus."),
+    "A339": ("Airbus A330-900neo", 300, "Kıvrık kanat uçlu yeni nesil geniş gövde Airbus."),
+    "A359": ("Airbus A350-900", 300, "Kokpit camları Zorro maskesine benzeyen ultra modern dev uçak!"),
+    "A35K": ("Airbus A350-1000", 360, "Arka tekerleklerinde 6'şar lastik bulunan dev kıtalararası uçak!"),
+    "A388": ("Airbus A380", 520, "Dünyanın en büyük yolcu uçağı! Baştan sona iki katlı uçan bir saraydır!"),
+    "B744": ("Boeing 747-400", 400, "Ön kısmındaki kamburuyla ünlü 'Gökyüzünün Kraliçesi' Jumbo Jet!"),
+    "B748": ("Boeing 747-8", 410, "Dünyanın en uzun yolcu ve kargo uçaklarından biri!"),
+    "C130": ("Lockheed C-130 Hercules 🪖", 92, "Eindhoven Hava Üssü'nün 4 pervaneli askeri kahramanı! Toprak piste bile inebilir."),
+    "C30J": ("C-130J Super Hercules 🪖", 92, "6 kanatlı pervaneleriyle çok güçlü askeri kargo uçağı!"),
+    "A400": ("Airbus A400M Atlas 🪖", 116, "Adı da 'Atlas'! Dev pervaneleri ters yönlere dönen süper güçlü askeri nakliye uçağı!"),
+    "C17": ("Boeing C-17 Globemaster III 🪖", 102, "İçine koca bir tank veya helikopter sığabilen 4 motorlu dev askeri jet!"),
+    "F35": ("Lockheed Martin F-35 Lightning II 🪖", 1, "Ses hızını aşabilen, radarda görünmeyen süper hızlı savaş uçağı!"),
+    "CH47": ("Boeing CH-47 Chinook 🚁", 44, "Önde ve arkada iki dev pervanesi olan, kamyon bile taşıyabilen güçlü helikopter!"),
+    "AH64": ("Boeing AH-64 Apache 🚁", 2, "Kraliyet Hava Kuvvetleri'nin ileri teknoloji keşif ve koruma helikopteri."),
+    "NH90": ("NHIndustries NH90 🚁", 20, "Gemilere dahi inebilen modern askeri arama-kurtarma helikopteri."),
+    "EC35": ("Airbus H135 Helikopter 🚁", 5, "Çoğunlukla sarı renkli 'Lifeliner' hava ambulansı veya polis helikopteri olarak uçar!"),
+    "H135": ("Airbus H135 Helikopter 🚁", 5, "Doktorları trafiğe takılmadan dakikalar içinde olay yerine ulaştıran helikopter!"),
+    "EC45": ("Airbus H145 Helikopter 🚁", 8, "Kuyruk pervanesi kapalı (Fenestron) olduğu için çok güvenli ve sessiz helikopter."),
+    "H145": ("Airbus H145 Helikopter 🚁", 8, "Arama-kurtarma ve hava ambulansı görevlerinin hızlı yıldızı!"),
+    "PC12": ("Pilatus PC-12 🛩️", 9, "İsviçre yapımı, tek pervaneli ama jet kadar hızlı özel uçak!"),
+    "C56X": ("Cessna Citation Excel 🛩️", 8, "İş insanlarını ve özel yolcuları taşıyan hızlı özel jet."),
+    "GLF5": ("Gulfstream V 🛩️", 14, "Büyük oval pencereli, okyanus aşabilen ultra hızlı özel jet!"),
+    "GLF6": ("Gulfstream G650 🛩️", 16, "Neredeyse ses hızına yakın uçabilen dünyanın en hızlı özel jetlerinden biri!"),
 }
 
 # Havayoluna özel koltuk sayısı (tipik düzen, yaklaşık): (havayolu, tip) -> koltuk
 SEATS_BY_AIRLINE = {
-    ("TRA", "B738"): 189, ("TRA", "B737"): 149,
+    ("TRA", "B738"): 189, ("TRA", "B737"): 149, ("TRA", "A21N"): 232,
     ("RYR", "B738"): 189, ("RYR", "B38M"): 197,
     ("WZZ", "A320"): 180, ("WZZ", "A20N"): 186, ("WZZ", "A321"): 230, ("WZZ", "A21N"): 239,
     ("EZY", "A319"): 156, ("EZY", "A320"): 180, ("EZY", "A20N"): 186,
+    ("PGT", "A20N"): 186, ("PGT", "A21N"): 239, ("PGT", "B738"): 189,
+    ("TUI", "B38M"): 189, ("TUI", "B738"): 189, ("TUI", "B788"): 300,
 }
+
+COMPASS_TR = [
+    ("Kuzey", "⬆️"), ("Kuzeydoğu", "↗️"), ("Doğu", "➡️"), ("Güneydoğu", "↘️"),
+    ("Güney", "⬇️"), ("Güneybatı", "↙️"), ("Batı", "⬅️"), ("Kuzeybatı", "↖️"),
+]
+
+
+def compass_label(deg):
+  idx = int(((deg + 22.5) % 360) // 45)
+  name, arrow = COMPASS_TR[idx]
+  return f"{arrow} {name}"
 
 
 def seat_text(airline_key, type_code, default=None):
   """'~189 koltuk' gibi metin; bilinmiyorsa 'Bilinmiyor'."""
   n = SEATS_BY_AIRLINE.get((airline_key, type_code)) or default
   return f"~{n} koltuk" if n else "Bilinmiyor"
+
+
+def kid_comparison(f):
+  """Atlas için hız ve yükseklik karşılaştırması (her uçak için dinamik üretilir)."""
+  spd = f.get("speed") or 0
+  alt_m = round((f.get("alt_ft") or 0) * 0.3048)
+  parts = []
+  if spd >= 300:
+    cars = max(2, round(spd / 100))
+    parts.append(f"🏎️ Otobandaki bir arabadan <b>{cars} kat</b> hızlı!")
+  elif spd >= 120:
+    parts.append(f"🐆 Bir çitadan bile <b>2 kat</b> hızlı gidiyor!")
+  if alt_m >= 600:
+    eiffel = max(2, round(alt_m / 300))
+    parts.append(f"🗼 Üst üste <b>{eiffel} Eyfel Kulesi</b> yüksekliğinde!")
+  elif alt_m >= 90:
+    floors = max(10, round(alt_m / 3.5))
+    parts.append(f"🏢 Yaklaşık <b>{floors} katlı</b> bir gökdelen boyunda!")
+  return " · ".join(parts)
 
 WMO = {  # Open-Meteo hava kodu -> (emoji, açıklama)
     0: ("☀️", "Açık"), 1: ("🌤️", "Az bulutlu"), 2: ("⛅", "Parçalı bulutlu"),
@@ -227,6 +328,8 @@ header[data-testid="stHeader"]{background:transparent!important;height:0!importa
 .strip .sub{color:var(--muted);font-size:.76rem;margin-left:8px;}
 .strip b{color:#fff;}
 .strip.hot{border-color:rgba(56,189,248,.5);background:linear-gradient(90deg,rgba(56,189,248,.14),rgba(124,77,255,.08));}
+.strip.garden-now{border-color:#22c55e;background:linear-gradient(90deg,rgba(34,197,94,.24),rgba(250,204,21,.12));
+  box-shadow:0 0 18px rgba(34,197,94,.25);}
 
 /* Logo */
 .logo{display:inline-flex;align-items:center;justify-content:center;border-radius:12px;font-weight:900;
@@ -237,7 +340,7 @@ header[data-testid="stHeader"]{background:transparent!important;height:0!importa
 .logo-img img{max-height:100%;max-width:100%;object-fit:contain;padding:6px 4px;}
 
 /* Sağ detay paneli */
-.panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px 16px;min-height:690px;box-sizing:border-box;}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px 16px;min-height:640px;box-sizing:border-box;}
 .panel .head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;}
 .panel .cs{font-size:1.7rem;font-weight:800;color:#fff;line-height:1.05;}
 .panel .al{color:var(--muted);font-size:.9rem;margin-top:2px;}
@@ -261,7 +364,13 @@ header[data-testid="stHeader"]{background:transparent!important;height:0!importa
 .status2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;}
 .sbox{border-radius:12px;padding:10px;text-align:center;font-weight:700;font-size:.88rem;}
 .sbox.a{background:#14532d;color:#bbf7d0;} .sbox.b{background:#0e1630;border:1px solid var(--line);color:#cbd5e1;}
-.fact{margin-top:8px;font-size:.85rem;color:#b7c0da;background:#0e1630;border-radius:12px;padding:10px 12px;}
+.compass-box{margin-top:8px;background:linear-gradient(120deg,rgba(14,116,144,.25),rgba(30,58,138,.25));
+  border:1px solid rgba(56,189,248,.35);border-radius:12px;padding:9px 12px;font-size:.84rem;color:#e0f2fe;}
+.compass-box b{color:#fde047;}
+.fids-match{margin-top:8px;background:#0e1630;border:1px solid rgba(251,146,60,.4);border-radius:12px;
+  padding:8px 12px;font-size:.82rem;color:#e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;}
+.fact{margin-top:8px;font-size:.85rem;color:#b7c0da;background:#0e1630;border:1px solid rgba(124,77,255,.28);border-radius:12px;padding:10px 12px;line-height:1.45;}
+.fact b{color:#f8fafc;}
 .empty{text-align:center;color:var(--muted);padding:80px 10px;}
 .empty .big{font-size:3rem;}
 
@@ -365,7 +474,7 @@ div.stButton>button:hover{border-color:#38bdf8;color:#fff;}
 .fg{font-size:1.35rem;flex:none;}
 .alogo{flex:none;width:44px;height:30px;border-radius:8px;background:#eef0f4 center/contain no-repeat;
   background-origin:content-box;padding:3px;box-sizing:border-box;box-shadow:0 1px 4px rgba(0,0,0,.35);}
-.alogo.txt{display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:900;padding:0;}
+.alogo.txt{display:inline-flex;align-items:center;font-size:.7rem;font-weight:900;padding:0;justify-content:center;}
 .c-gate{text-align:center;font-weight:800;color:#e2e8f0;font-size:.9rem;}
 .c-gate.na{color:#475569;font-weight:600;}
 .pill{display:inline-block;border-radius:999px;padding:4px 10px;font-size:.74rem;font-weight:800;white-space:nowrap;}
@@ -380,12 +489,22 @@ div.stButton>button:hover{border-color:#38bdf8;color:#fff;}
 .tnote{margin:10px 0 0;padding:8px 14px;border-radius:12px;background:var(--card);border:1px solid var(--line);font-size:.8rem;color:#cdd5ea;}
 .tnote.warn{border-color:rgba(245,158,11,.5);}
 
-/* Gözlem defteri */
+/* Gözlem defteri & Avcı Rozetleri */
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px;}
 .kpi{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;}
 .kpi small{display:block;color:var(--muted);font-size:.7rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;}
 .kpi b{display:block;font-size:1.9rem;color:#fff;line-height:1.15;}
 .kpi span{font-size:.78rem;color:#9aa7c7;}
+.rank-box{background:linear-gradient(120deg,#1e293b,#1e1b4b);border:1px solid rgba(250,204,21,.35);
+  border-radius:16px;padding:14px 18px;margin-bottom:12px;}
+.rank-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+.rank-title{font-size:1.1rem;font-weight:800;color:#fde047;}
+.badge-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px;}
+.bcard{background:#0e1630;border:1px solid var(--line);border-radius:12px;padding:8px 10px;text-align:center;opacity:.45;}
+.bcard.on{opacity:1;border-color:rgba(250,204,21,.5);background:linear-gradient(160deg,#172554,#1e1b4b);}
+.bcard .bi{font-size:1.45rem;display:block;line-height:1.1;}
+.bcard b{display:block;font-size:.78rem;color:#fff;margin-top:3px;}
+.bcard small{display:block;font-size:.68rem;color:var(--muted);line-height:1.2;margin-top:2px;}
 .bars{display:flex;align-items:flex-end;gap:10px;height:110px;padding:10px 6px 0;}
 .bar{flex:1;text-align:center;display:flex;flex-direction:column;justify-content:flex-end;height:100%;}
 .bar i{display:block;border-radius:8px 8px 3px 3px;background:linear-gradient(180deg,#38bdf8,#6d4aff);min-height:3px;}
@@ -398,7 +517,7 @@ div.stButton>button:hover{border-color:#38bdf8;color:#fff;}
 .box h4{margin:0 0 6px;color:#fff;font-size:.95rem;}
 
 @media (max-width:900px){
-  .kpis{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .kpis,.badge-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
   .fgrid.arr,.fgrid.dep{grid-template-columns:52px minmax(0,1.25fr) minmax(0,1.15fr) auto;gap:8px;padding:0 12px;}
   .fgrid .c-dl,.fgrid .c-gate,.fgrid .alogo,.fcols>div:last-child{display:none;}
   .fgrid.dep.fcols>div:nth-child(4){display:none;}
@@ -468,7 +587,7 @@ def esc(x):
 
 @st.cache_data(ttl=1500, show_spinner=False)
 def _opensky_token(client_id, client_secret):
-  r = requests.post(
+  r = _http_post(
       OPENSKY_TOKEN_URL,
       data={
           "grant_type": "client_credentials",
@@ -520,8 +639,8 @@ def _from_opensky(bearer, radius_km):
   """(states, hata_metni). Hata yoksa metin ''."""
   headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
   try:
-    r = requests.get(OPENSKY_URL, params=bbox_for(radius_km + 10), headers=headers,
-                     timeout=OPENSKY_TIMEOUT)
+    r = _http_get(OPENSKY_URL, params=bbox_for(radius_km + 10), headers=headers,
+                  timeout=OPENSKY_TIMEOUT)
   except requests.RequestException as e:
     return None, f"OpenSky {_err_word(e)}"
   if r.status_code == 429:
@@ -572,7 +691,7 @@ def _from_adsblol(radius_km):
   nm = min(250, max(1, math.ceil((radius_km + 10) / 1.852)))
   url = ADSBLOL_URL.format(lat=AIRPORT_LAT, lon=AIRPORT_LON, nm=nm)
   try:
-    r = requests.get(url, timeout=8)
+    r = _http_get(url, timeout=8)
   except requests.RequestException as e:
     return None, f"adsb.lol {_err_word(e)}"
   if r.status_code != 200:
@@ -584,20 +703,20 @@ def _from_adsblol(radius_km):
 
 
 _TCACHE = {}          # (bearer, yarıçap) -> (zaman, sonuç)   (tüm oturumlar için ortak)
-STALE_OK_S = 120      # sayfa geçişinde bu kadar eski veri anında gösterilir, arka planda tazelenir
+STALE_OK_S = 120      # sayfa geçişinde ve otomatik yenilemede bu kadar eski veri anında gösterilir, arka planda tazelenir
 
 
 def _traffic_job(key, bearer, radius_km, store, cov_km, overflights):
-  """Arka plan: trafik verisini çeker, rota/uçak/logo kayıtlarını ısıtır, SONRA yayımlar
-  (sayfa yayımlanan veriyi anında çizer, rota için beklemez)."""
+  """Arka plan: trafik verisini çeker, hemen önbelleğe yazar ve rota/uçak/logo kayıtlarını ısıtır."""
   try:
     res = _fetch_states_live(bearer, radius_km)
+    _TCACHE[key] = (time.time(), res)
     if store is not None and res[1] == "ok":
       try:
         attach_logos(build_flights(res[0], store, overflights, cov_km, True), store)
+        _TCACHE[key] = (time.time(), res)
       except Exception:
         pass
-    _TCACHE[key] = (time.time(), res)
   except Exception:
     pass
   finally:
@@ -617,7 +736,7 @@ def _start_traffic_job(key, bearer, radius_km, store, cov_km, overflights):
 def fetch_states(bearer, radius_km=NEAR_KM, allow_stale=False, store=None, cov_km=None,
                  overflights=False, block=True):
   """(states, durum_mesajı, epoch). FETCH_TTL sn önbellek.
-  allow_stale=True iken (sayfa geçişi) eski ama başarılı veri beklemeden verilir, tazesi arka planda çekilir.
+  allow_stale=True iken eski ama başarılı veri beklemeden verilir, tazesi arka planda çekilir.
   block=False iken veri hiç yoksa BEKLEMEZ: arka planda başlatır ve ([], "loading", ...) döndürür."""
   key = (bearer, radius_km)
   hit = _TCACHE.get(key)
@@ -687,9 +806,9 @@ def cached(store, key, ttl_ok, ttl_fail, fn):
   return val
 
 
-def _get_json(url, timeout=3):
+def _get_json(url, timeout=2.5):
   try:
-    r = requests.get(url, timeout=timeout)
+    r = _http_get(url, timeout=timeout)
     if r.status_code == 200:
       return r.json()
   except (requests.RequestException, ValueError):
@@ -697,10 +816,10 @@ def _get_json(url, timeout=3):
   return None
 
 
-def _get_json_ex(url, timeout=3):
+def _get_json_ex(url, timeout=2.5):
   """('ok'|'none'|'err', json). 404 = kayıt gerçekten yok ('none'); ağ/sunucu hatası = 'err'."""
   try:
-    r = requests.get(url, timeout=timeout)
+    r = _http_get(url, timeout=timeout)
     if r.status_code == 200:
       return "ok", r.json()
     if r.status_code == 404:
@@ -784,7 +903,7 @@ def fetch_logo(key, iata, store):
       return ""
     for tpl in LOGO_URLS:
       try:
-        r = requests.get(tpl.format(iata=iata), timeout=4)
+        r = _http_get(tpl.format(iata=iata), timeout=4)
         ctype = r.headers.get("content-type", "")
         if r.status_code == 200 and ctype.startswith("image") and len(r.content) > 300:
           return f"data:{ctype.split(';')[0]};base64,{base64.b64encode(r.content).decode()}"
@@ -820,7 +939,7 @@ def fetch_weather():
 
 def _fetch_weather_raw():
   try:
-    r = requests.get(
+    r = _http_get(
         "https://api.open-meteo.com/v1/forecast",
         params={
             "latitude": HOME_LAT,
@@ -864,9 +983,23 @@ def airport_view(a):
 
 
 def enrich_geometry(f):
-  """Evden uzaklık, yaklaşıyor mu, tahmini geçiş süresi, görünürlük."""
+  """Evden uzaklık, yaklaşıyor mu, tahmini geçiş süresi, görünürlük ve gökyüzü pusulası."""
   f["dist_home"] = haversine_km(f["lat"], f["lon"], HOME_LAT, HOME_LON)
   to_home = bearing_deg(f["lat"], f["lon"], HOME_LAT, HOME_LON)
+  from_home = (to_home + 180) % 360
+  f["look_dir"] = compass_label(from_home)
+  alt_m = max(0.0, (f.get("alt_ft") or 0) * 0.3048)
+  dist_m = max(80.0, f["dist_home"] * 1000.0)
+  elev = round(math.degrees(math.atan2(alt_m, dist_m)))
+  f["elev_deg"] = elev
+  if elev >= 45:
+    f["look_hint"] = f"🦅 Tam tepemizde! Başını yukarı kaldır ({elev}°)"
+  elif elev >= 20:
+    f["look_hint"] = f"👀 Gökyüzünde orta yükseklikte ({elev}°)"
+  elif elev >= 8:
+    f["look_hint"] = f"🌲 Ağaçların / çatıların üstünde ({elev}°)"
+  else:
+    f["look_hint"] = f"🌅 Ufuk çizgisine yakın ({elev}°)"
   f["approaching"] = angle_diff(f["track"], to_home) < 60 and f["speed"] > 80
   f["eta_min"] = (f["dist_home"] / f["speed"] * 60) if f["approaching"] else None
   f["visible"] = f["dist_home"] <= CFG["visible_km"] and f["alt_ft"] <= CFG["visible_alt"]
@@ -883,6 +1016,9 @@ def enrich_geometry(f):
 
 def resolve_airline(prefix, route, ac):
   """(anahtar, ad, IATA) döndürür."""
+  if prefix in SPECIAL_PREFIXES:
+    sp = SPECIAL_PREFIXES[prefix]
+    return prefix, sp[0], sp[3]
   key = ALIASES.get(prefix, prefix)
   ral = (route or {}).get("airline") or {}
   if key in AIRLINES:
@@ -927,7 +1063,28 @@ def _candidates(states, overflights=False, coverage_km=NEAR_KM):
   return out
 
 
-def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_unknown=False, stats=None):
+def _match_fids(fids_map, callsign, prefix, reg):
+  """Canlı uçağı Terminal (fids_flights) tablosundaki kayıtla eşleştirir."""
+  if not fids_map:
+    return None
+  cs_clean = (callsign or "").strip().upper().replace(" ", "")
+  if cs_clean and cs_clean in fids_map["cs"]:
+    return fids_map["cs"][cs_clean]
+  if cs_clean and cs_clean in fids_map["num"]:
+    return fids_map["num"][cs_clean]
+  # ICAO çağrı kodunu IATA uçuş numarasına çevirerek dene (ör. TRA6710 -> HV6710)
+  akey = ALIASES.get(prefix, prefix)
+  if akey in AIRLINES and len(cs_clean) > 3:
+    iata_num = AIRLINES[akey][3] + cs_clean[3:]
+    if iata_num in fids_map["num"]:
+      return fids_map["num"][iata_num]
+  reg_clean = (reg or "").strip().upper().replace("-", "").replace(" ", "")
+  if reg_clean and reg_clean in fids_map["reg"]:
+    return fids_map["reg"][reg_clean]
+  return None
+
+
+def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_unknown=False, stats=None, fids_map=None):
   """stats (sözlük) verilirse stats["hidden_unknown"] = rotası bilinmediği için gizlenen uçak sayısı."""
   hidden = 0
   cands = _candidates(states, overflights, coverage_km)
@@ -939,24 +1096,61 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
     routes = dict(zip(callsigns, (f.result() for f in f_r)))
     acs = dict(zip(hexes, (f.result() for f in f_a)))
 
+  ein_ap = {"iata": "EIN", "icao": AIRPORT_ICAO, "city": "Eindhoven", "flag": "🇳🇱",
+            "lat": AIRPORT_LAT, "lon": AIRPORT_LON}
+  now_loc = fids.now_local() if fids_map else None
+
   flights = []
   for s, alt_ft, kind, d_air in cands:
     icao24 = s[0]
     callsign = (s[1] or "").strip()
     lon, lat = s[5], s[6]
+    ac = acs.get(icao24) or {}
+    reg = ac.get("registration") or ""
+    tcode = ac.get("icao_type") or ""
+    prefix = callsign[:3].upper() if callsign[:3].isalpha() else ""
+
     route = routes.get(callsign) or {}
     pending = route.get("_state") == "err"           # geçici hata: uçağı gizleme, tekrar denenecek
     if route.get("_state"):
       route = {}
-    has_route = bool(route.get("origin") or route.get("destination"))
+    origin = airport_view(route.get("origin"))
+    dest = airport_view(route.get("destination"))
+
+    # Terminal (FIDS) verisi ile canlı radarı birleştir: adsbdb'de rota yoksa veya kapı/saat bilgisi varsa tamamla
+    fids_row = _match_fids(fids_map, callsign, prefix, reg)
+    fids_info = fids.board_row(fids_row, now_loc) if (fids_row and now_loc) else None
+    if fids_row and not (origin or dest):
+      other_ap = {
+          "iata": fids_row.get("other_iata") or fids_row.get("other_icao") or "?",
+          "icao": fids_row.get("other_icao"),
+          "city": fids_row.get("other_city") or "",
+          "flag": flag(fids_row.get("other_cc")),
+          "lat": None, "lon": None,
+      }
+      if fids_row.get("direction") == "ARR":
+        origin, dest = other_ap, ein_ap
+      else:
+        origin, dest = ein_ap, other_ap
+      pending = False
+
+    # Askeri / Hava Ambulansı / Polis helikopterleri: rotası adsbdb'de olmasa bile gizleme!
+    is_special = (prefix in SPECIAL_PREFIXES) or (tcode in SPECIAL_TYPES)
+    if is_special and not (origin or dest):
+      origin = ein_ap
+      dest = {"iata": "GÖREV", "icao": AIRPORT_ICAO, "city": "Özel / Askeri Görev", "flag": "🪖",
+              "lat": HOME_LAT, "lon": HOME_LON}
+      pending = False
+
+    has_route = bool(origin or dest)
     if not has_route and not pending and not show_unknown:
       hidden += 1                                    # rotası bilinmiyor: listede/haritada gösterme
       continue
-    ac = acs.get(icao24) or {}
-    prefix = callsign[:3].upper() if callsign[:3].isalpha() else ""
+
     akey, aname, aiata = resolve_airline(prefix, route, ac)
-    origin = airport_view(route.get("origin"))
-    dest = airport_view(route.get("destination"))
+    if fids_row and aname in ("Bilinmiyor", prefix) and fids_row.get("airline"):
+      aname = fids_row["airline"]
+      aiata = aiata or (fids_row.get("airline_iata") or "")
     to_ein = bool(dest and dest["icao"] == AIRPORT_ICAO)
     from_ein = bool(origin and origin["icao"] == AIRPORT_ICAO)
 
@@ -965,7 +1159,9 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
       continue
 
     vrate = s[11] or 0
-    if to_ein:
+    if fids_row and fids_row.get("direction") in ("ARR", "DEP"):
+      direction = fids_row["direction"]
+    elif to_ein:
       direction = "ARR"
     elif from_ein:
       direction = "DEP"
@@ -976,13 +1172,16 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
     if direction == "TRN" and not overflights:
       continue
 
-    tcode = ac.get("icao_type") or ""
     tinfo = AIRCRAFT_TYPES.get(tcode)
     if tinfo:
       tname, seats, fact = tinfo
     else:
-      tname = " ".join(x for x in [ac.get("manufacturer"), ac.get("type")] if x) or "Bilinmiyor"
+      tname = (" ".join(x for x in [ac.get("manufacturer"), ac.get("type")] if x)
+               or (fids_row.get("aircraft") if fids_row else "")
+               or "Bilinmiyor")
       seats, fact = None, ""
+    if not reg and fids_row and fids_row.get("reg"):
+      reg = fids_row["reg"]
     capacity = seat_text(akey, tcode, seats)
 
     progress = None
@@ -999,9 +1198,9 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
         "airline_key": akey, "airline": aname, "airline_iata": aiata, "logo": "",
         "dir": direction, "origin": origin, "dest": dest, "progress": progress,
         "type_code": tcode, "type_name": tname, "capacity": capacity, "fact": fact,
-        "reg": ac.get("registration") or "", "photo": ac.get("url_photo_thumbnail") or "",
+        "reg": reg, "photo": ac.get("url_photo_thumbnail") or "",
         "photo_credit": "", "country": s[2] or "", "tpos": s[3] or s[4] or 0,
-        "route_known": has_route, "route_pending": pending,
+        "route_known": has_route, "route_pending": pending, "fids": fids_info,
     }
     flights.append(enrich_geometry(f))
   if stats is not None:
@@ -1167,7 +1366,10 @@ def logo_html(f, size="md"):
   if f.get("logo"):
     return (f"<span class='{cls} logo-img'><img src='{f['logo']}' "
             f"alt='{esc(f['airline'])}'></span>")
-  _, bg, fg, _i = AIRLINES.get(f["airline_key"], (f["airline"], "#2b3558", "#ffffff", ""))
+  if f["airline_key"] in SPECIAL_PREFIXES:
+    _, bg, fg, _i = SPECIAL_PREFIXES[f["airline_key"]]
+  else:
+    _, bg, fg, _i = AIRLINES.get(f["airline_key"], (f["airline"], "#2b3558", "#ffffff", ""))
   return f"<span class='{cls}' style='background:{bg};color:{fg}'>{esc(f['airline'])}</span>"
 
 
@@ -1234,7 +1436,28 @@ def runway_html(info):
           f"<span class='sub'>· {src}</span></span></div>")
 
 
+def chime_script_html():
+  """Bahçeye uçak girdiğinde tarayıcıda nazik bir kokpit 'ding-dong' sesi çalar."""
+  return (
+      "<script>(function(){try{var C=window.AudioContext||window.webkitAudioContext;if(!C)return;"
+      "var ctx=new C(),now=ctx.currentTime;"
+      "[[587.33,0,0.35],[493.88,0.32,0.55]].forEach(function(n){"
+      "var o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=n[0];"
+      "g.gain.setValueAtTime(0.15,now+n[1]);g.gain.exponentialRampToValueAtTime(0.001,now+n[1]+n[2]);"
+      "o.connect(g);g.connect(ctx.destination);o.start(now+n[1]);o.stop(now+n[1]+n[2]);});"
+      "}catch(e){}})();</script>"
+  )
+
+
 def next_banner_html(flights, updated):
+  vis_now = [f for f in flights if f.get("visible")]
+  if vis_now:
+    f = min(vis_now, key=lambda x: x["dist_home"])
+    look = f" · 🧭 <b>{esc(f.get('look_dir', ''))}</b> yönüne bak ({f.get('elev_deg', 0)}°)" if f.get("look_dir") else ""
+    return (f"<div class='strip garden-now'><span class='ic'>🚨</span><span class='tx'>"
+            f"<b>BAŞINI KALDIR ATLAS!</b> · Sıradaki: <b>{esc(f['callsign'])}</b> ({esc(f['airline'])}) "
+            f"şimdi bahçeden görünüyor! · <b>{eta_text(f)}</b>{look}"
+            f"<span class='sub'>· {fmt_int(f['alt_ft'])} ft</span></span></div>")
   cand = [f for f in flights if f["eta_min"] is not None and f["alt_ft"] <= CFG["visible_alt"] * 1.6]
   if not cand:
     return (f"<div class='strip'><span class='ic'>🔭</span><span class='tx'>Şu an bahçeye yaklaşan uçak yok"
@@ -1243,8 +1466,9 @@ def next_banner_html(flights, updated):
   o = f["origin"]
   frm = f"{o['flag']} {esc(o['city'])}" if (o and f["dir"] == "ARR") else ""
   verb = f"{frm}'dan geliyor" if frm else ("kalkış yaptı" if f["dir"] == "DEP" else "yaklaşıyor")
+  look = f" · 🧭 {esc(f.get('look_dir', ''))}" if f.get("look_dir") else ""
   return (f"<div class='strip hot'><span class='ic'>👀</span><span class='tx'>Sıradaki: <b>{esc(f['callsign'])}</b>"
-          f" · {esc(f['airline'])} · {verb} · <b>{eta_text(f)}</b>"
+          f" · {esc(f['airline'])} · {verb} · <b>{eta_text(f)}</b>{look}"
           f"<span class='sub'>· {fmt_int(f['alt_ft'])} ft</span></span></div>")
 
 
@@ -1277,8 +1501,33 @@ def detail_html(f):
   vis = ("<span class='badge vis'>👀 Bahçeden görünür</span>" if f["visible"]
          else "<span class='badge far'>Uzakta</span>")
   reg = f" · {esc(f['reg'])}" if f["reg"] else ""
-  fact = f"<div class='fact'>💡 {esc(f['fact'])}</div>" if f["fact"] else ""
   alt_m = round(f["alt_ft"] * 0.3048)
+
+  # Gökyüzü pusulası (Atlas ile bahçeden bakarken hangi yöne bakılacağını gösterir)
+  compass = ""
+  if f.get("look_dir"):
+    compass = (f"<div class='compass-box'>🧭 <b>Nereye Bakmalı?</b> Bahçeden <b>{esc(f['look_dir'])}</b> "
+               f"yönüne dön · {esc(f.get('look_hint', ''))}</div>")
+
+  # Eindhoven Terminal (FIDS) eşleşmesi varsa kapı / saat / durum bilgisi
+  fids_box = ""
+  fi = f.get("fids")
+  if fi:
+    tm_s = f"<b>{esc(fi['sched_hm'])}</b>" + (f" → <b>{esc(fi['eff_hm'])}</b>" if fi.get("eff_hm") else "")
+    gt_s = f" · Kapı <b>{esc(fi['gate'])}</b>" if fi.get("gate") else ""
+    dl_s = f" ({esc(fi['delay_txt'])})" if fi.get("delay_txt") else ""
+    fids_box = (f"<div class='fids-match'><span>🛫 <b>Terminal:</b> Saat {tm_s}{gt_s}</span>"
+                f"<span class='pill {esc(fi['status_kind'])}'>{esc(fi['status_label'])}{dl_s}</span></div>")
+
+  # Çocuk dostu bilgi + eğlenceli hız/irtifa karşılaştırması
+  cmp_txt = kid_comparison(f)
+  fact_parts = []
+  if f.get("fact"):
+    fact_parts.append(f"💡 {esc(f['fact'])}")
+  if cmp_txt:
+    fact_parts.append(cmp_txt)
+  fact = f"<div class='fact'>{'<br>'.join(fact_parts)}</div>" if fact_parts else ""
+
   return f"""
   <div class='panel'>
     <div class='head'>{logo_html(f, 'xl')}<div style='text-align:right'>{dir_badge(f)}<br><span style='display:inline-block;margin-top:6px'>{vis}</span></div></div>
@@ -1286,6 +1535,8 @@ def detail_html(f):
     <div class='al'>{esc(f['airline'])} · {esc(f['type_name'])}{reg}</div>
     {photo}
     <div class='route'>{ap(o)}{bar}{ap(d)}</div>
+    {compass}
+    {fids_box}
     <div class='grid2'>
       <div class='stat'><small>Yükseklik</small><b>{fmt_int(f['alt_ft'])} ft</b> <span style='color:#8b97b8;font-size:.8rem'>({fmt_int(alt_m)} m)</span></div>
       <div class='stat'><small>Hız</small><b>{fmt_int(f['speed'])} km/sa</b> <span style='color:#8b97b8;font-size:.8rem'>({fmt_int(f['speed'] / 1.852)} kt)</span></div>
@@ -1303,12 +1554,13 @@ def detail_html(f):
 def card_html(f, selected):
   cls = "fcard sel" if selected else "fcard"
   vis = "👀 görünür" if f["visible"] else ("geçiş" if f["dir"] == "TRN" else "uzakta")
+  look = f" · {esc(f.get('look_dir', ''))}" if f.get("visible") and f.get("look_dir") else ""
   return f"""
   <div class='{cls}'>
     <div class='r1'>{logo_html(f, 'md')}{dir_badge(f)}</div>
     <div class='cs'>{esc(f['callsign'])}</div>
     <div class='rt'>{route_short(f)}</div>
-    <div class='meta'>{esc(f['type_name'])} · {fmt_int(f['alt_ft'])} ft · {vis}</div>
+    <div class='meta'>{esc(f['type_name'])} · {fmt_int(f['alt_ft'])} ft · {vis}{look}</div>
     <div class='meta'>🛩️ {fmt_int(f['speed'])} km/sa · 💺 {esc(f['capacity'])}</div>
     <div class='meta'>{eta_text(f)}</div>
   </div>"""
@@ -1474,9 +1726,10 @@ def build_map(flights, sel_id, cov_km=NEAR_KM, view_km=35, view=None):
 import re  # noqa: E402
 
 PAGES = ["🛰️ Radar", "🛫 Terminal", "📒 Gözlem Defteri"]
-DEFAULT_PAGE = PAGES[1]      # açılışta Terminal: veritabanından anında dolar, Radar sekmeye geçince yüklenir
-APP_VERSION = "v0.3.14"
+DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Radar: bahçede uçak duyunca anında görünsün
+APP_VERSION = "v0.4.0"
 CHANGELOG = [
+    ("v0.4.0", "Baba-oğul sürümü: açılışta doğrudan Radar, Gökyüzü Pusulası, sesli bahçe uyarısı, Terminal-Radar rota birleştirme, Avcı Rozetleri ve sıfır bloklamalı yenileme"),
     ("v0.3.14", "Açılış hızlandı: GitHub verisi, hava durumu ve uçak fotoğrafı arka planda; performans testleri"),
     ("v0.3.13", "Radar önceden ısıtılır: Terminal açıkken trafik/rota/uçak verisi arka planda hazırlanır"),
     ("v0.3.12", "Sürüm izi; havalimanı kodu açıklaması"),
@@ -1622,6 +1875,49 @@ def kpi_html(stats):
           "</div>")
 
 
+def badges_html(stats):
+  """Atlas'ın Uçak Avcısı rütbesi ve koleksiyon rozetleri."""
+  tot = stats.get("total", 0)
+  ranks = [
+      (0, 1, "🐣 Meraklı Gözlemci"),
+      (1, 5, "🔭 Bahçe Gözcüsü"),
+      (5, 15, "🛩️ Hava Trafik Uzmanı"),
+      (15, 30, "👨‍✈️ Baş Pilot"),
+      (30, 100, "🏆 Gökyüzü Efsanesi"),
+  ]
+  r_name, nxt_target = ranks[-1][2], 100
+  for lo, hi, nm in ranks:
+    if tot < hi:
+      r_name, nxt_target = nm, hi
+      break
+  pct = min(100, round(tot / max(1, nxt_target) * 100))
+  u_al = stats.get("unique_airlines", 0)
+  u_tp = stats.get("unique_types", 0)
+  m_day = stats.get("max_in_day", 0)
+  c_km = stats.get("closest_km")
+  m_alt = stats.get("min_alt_ft")
+  badges = [
+      ("🎯", "İlk Av", "İlk uçağı yakala", tot >= 1),
+      ("🔥", "Keskin Göz", "1 günde 5+ uçak", m_day >= 5),
+      ("🌍", "Dünya Turu", f"{u_al}/3 havayolu", u_al >= 3),
+      ("✈️", "Filo Uzmanı", f"{u_tp}/3 uçak tipi", u_tp >= 3),
+      ("🦅", "Alçak Uçuş", "2.500 ft altı uçak", bool(m_alt and m_alt <= 2500)),
+      ("🏠", "Tam Tepemizde", "Evden ≤2 km yakın", bool(c_km is not None and c_km <= 2.0)),
+      ("📅", "Sadık Gözcü", f"{stats.get('days', 0)}/3 farklı gün", stats.get("days", 0) >= 3),
+      ("👑", "Kule Efsanesi", f"{tot}/20 toplam uçak", tot >= 20),
+  ]
+  won = sum(1 for b in badges if b[3])
+  cards = "".join(
+      f"<div class='bcard{' on' if ok else ''}'><span class='bi'>{ic}</span><b>{nm}</b><small>{ds}</small></div>"
+      for ic, nm, ds, ok in badges
+  )
+  return (f"<div class='rank-box'>"
+          f"<div class='rank-head'><div class='rank-title'>🏅 Atlas'ın Rütbesi: {r_name}</div>"
+          f"<div style='font-size:.8rem;color:#cbd5e1'>Açılan rozet: <b>{won} / {len(badges)}</b> · Sonraki hedef: <b>{tot}/{nxt_target}</b> uçak</div></div>"
+          f"<div class='prog' style='margin:4px 0 8px'><div class='prog-fill' style='width:{pct}%'></div></div>"
+          f"<div class='badge-grid'>{cards}</div></div>")
+
+
 def bars_html(per_day, days):
   mx = max([per_day.get(d, 0) for d in days] + [1])
   names = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"]
@@ -1700,10 +1996,23 @@ def get_db():
   return radar_db.open_db(lambda k, d="": str(secret(k, d)), background=True)
 
 
+def _flight_to_sighting(f, day):
+  o, d = f.get("origin"), f.get("dest")
+  return {
+      "day": day, "icao24": f["id"], "callsign": f["callsign"], "airline": f["airline"],
+      "airline_key": f["airline_key"], "airline_iata": f["airline_iata"],
+      "type_code": f["type_code"], "type_name": f["type_name"], "reg": f["reg"],
+      "direction": f["dir"], "origin_iata": o["iata"] if o else None,
+      "origin_city": o["city"] if o else None, "dest_iata": d["iata"] if d else None,
+      "dest_city": d["city"] if d else None, "dist_km": round(f["dist_home"], 2),
+      "alt_ft": f["alt_ft"],
+  }
+
+
 def page_radar(db, store, demo, refresh_s_box):
   ss = st.session_state
   keep({"f_over": False, "f_cov": list(COVERAGE)[0], "f_visk": VISIBLE_KM, "f_visa": VISIBLE_ALT_FT,
-        "f_ovk": OVERFLIGHT_KM, "f_unk": False, "f_view": "Hepsi", "f_q": ""})
+        "f_ovk": OVERFLIGHT_KM, "f_unk": False, "f_sound": False, "f_view": "Hepsi", "f_q": ""})
   auth = "auth" if get_bearer() else "anon"
   active = ss.get("_active", False)
   refresh_s = (REFRESH_ACTIVE if active else REFRESH_IDLE)[auth]
@@ -1745,6 +2054,8 @@ def page_radar(db, store, demo, refresh_s_box):
         show_unknown = st.toggle("Rotası bilinmeyenleri de göster", key="f_unk",
                                  help="Kapalıyken rotası (nereden–nereye) bulunamayan uçaklar listede ve "
                                       "haritada gösterilmez.")
+        sound_on = st.toggle("🔔 Bahçe sesli uyarısı", key="f_sound",
+                             help="Bahçenin üstüne uçak girdiğinde kokpit 'ding-dong' anons sesi çalar.")
     with f1:
       views = ["Hepsi", "Varış", "Kalkış"] + (["Geçiş"] if overflights else [])
       if ss["f_view"] not in views:
@@ -1753,7 +2064,7 @@ def page_radar(db, store, demo, refresh_s_box):
     with f2:
       query = st.text_input("Ara", key="f_q", placeholder="🔍 Ara: HV6710, Transavia, Athens, 737, PH-HXK...",
                             label_visibility="collapsed")
-  remember(["f_over", "f_cov", "f_visk", "f_visa", "f_ovk", "f_unk", "f_view", "f_q"])
+  remember(["f_over", "f_cov", "f_visk", "f_visa", "f_ovk", "f_unk", "f_sound", "f_view", "f_q"])
   CFG["visible_km"], CFG["visible_alt"], CFG["overflight_km"] = vis_km, vis_alt, ovf_km
   cov_km, view_km = COVERAGE[cov_label]
 
@@ -1769,7 +2080,7 @@ def page_radar(db, store, demo, refresh_s_box):
     fetch_km = max(cov_km, ovf_km + 12) if overflights else cov_km  # ev havalimanından ~9 km uzakta
     t1 = time.time()
     states, status, fetched = fetch_states(get_bearer(), fetch_km,
-                                           allow_stale=bool(ss.get("_switched")),
+                                           allow_stale=COLD_NONBLOCK or bool(ss.get("_switched")),
                                            store=store, cov_km=cov_km, overflights=overflights,
                                            block=(not COLD_NONBLOCK) or bool(ss.get("_radar_seen")))
     if status == "loading":
@@ -1779,8 +2090,11 @@ def page_radar(db, store, demo, refresh_s_box):
     tm["veri"] = time.time() - t1
     raw_n = len(states)
     t1 = time.time()
+    now_loc = fids.now_local()
+    fids_map = db.fids_lookup_map(fids.to_iso(now_loc - timedelta(hours=3)),
+                                  fids.to_iso(now_loc + timedelta(hours=6)))
     all_flights = attach_logos(
-        build_flights(states, store, overflights, cov_km, show_unknown, bstats), store)
+        build_flights(states, store, overflights, cov_km, show_unknown, bstats, fids_map=fids_map), store)
     tm["uçaklar"] = time.time() - t1
     mode = "live" if status == "ok" else ("loading" if status == "loading" else "err")
     runway = infer_runway(states, wind_dir)
@@ -1790,18 +2104,10 @@ def page_radar(db, store, demo, refresh_s_box):
   if not demo and status == "ok":
     try:
       day = datetime.now(TZ).strftime("%Y-%m-%d")
-      items = []
-      for f in all_flights:
-        if f["visible"] and f.get("route_known"):
-          o, d = f["origin"], f["dest"]
-          items.append({
-              "day": day, "icao24": f["id"], "callsign": f["callsign"], "airline": f["airline"],
-              "airline_key": f["airline_key"], "airline_iata": f["airline_iata"],
-              "type_code": f["type_code"], "type_name": f["type_name"], "reg": f["reg"],
-              "direction": f["dir"], "origin_iata": o["iata"] if o else None,
-              "origin_city": o["city"] if o else None, "dest_iata": d["iata"] if d else None,
-              "dest_city": d["city"] if d else None, "dist_km": round(f["dist_home"], 2),
-              "alt_ft": f["alt_ft"]})
+      items = [
+          _flight_to_sighting(f, day) for f in all_flights
+          if f["visible"] and (f.get("route_known") or f.get("reg") or f.get("type_code"))
+      ]
       if items:
         db.record_sightings(items, datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S"))
     except Exception:  # defter hatası radarı asla durdurmasın
@@ -1854,6 +2160,14 @@ def page_radar(db, store, demo, refresh_s_box):
     vis_first = [f for f in flights if f["visible"]] or flights
     ss["sel"] = vis_first[0]["id"] if vis_first else None
 
+  # Sesli bahçe uyarısı: bahçede yeni bir uçak belirdiğinde kokpit anonsu çal
+  vis_planes = [f for f in flights if f["visible"]]
+  if sound_on and vis_planes:
+    top_vis_id = vis_planes[0]["id"]
+    if ss.get("_last_chime_id") != top_vis_id:
+      ss["_last_chime_id"] = top_vis_id
+      st.markdown(chime_script_html(), unsafe_allow_html=True)
+
   # --- Üst bar + sıradaki uçak ---
   with c_top:
     st.markdown(topbar_html(weather, datetime.now(TZ), counts, mode, status),
@@ -1891,6 +2205,15 @@ def page_radar(db, store, demo, refresh_s_box):
         if ph:
           selected = {**selected, "photo": ph["src"], "photo_credit": ph.get("credit", "")}
       st.markdown(detail_html(selected), unsafe_allow_html=True)
+      if selected and not demo:
+        if st.button(f"📒 {selected['callsign']} Uçağını Deftere Kaydet", key="spot_manual_btn",
+                     use_container_width=True):
+          day = datetime.now(TZ).strftime("%Y-%m-%d")
+          db.record_sightings([_flight_to_sighting(selected, day)],
+                              datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S"))
+          ss["_spot_msg"] = f"🎉 {selected['callsign']} Atlas'ın Gözlem Defteri'ne eklendi!"
+        if ss.get("_spot_msg"):
+          st.caption(ss.pop("_spot_msg"))
 
   # --- Kart şeridi ---
   with c_strip:
@@ -2060,9 +2383,10 @@ def page_diary(db, store, demo, refresh_s_box):
   days = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
   stats = db.sighting_stats(today, days[0])
   st.markdown("<div class='term-head'><div><div class='tt'>📒 Gözlem Defteri</div>"
-              "<div class='ts'>Bahçeden görülen uçaklar otomatik kaydedilir</div></div></div>",
+              "<div class='ts'>Bahçeden görülen uçaklar otomatik kaydedilir · Atlas'ın Uçak Avcısı Koleksiyonu</div></div></div>",
               unsafe_allow_html=True)
   st.markdown(kpi_html(stats), unsafe_allow_html=True)
+  st.markdown(badges_html(stats), unsafe_allow_html=True)
   cL, cR = st.columns([1.5, 1])
   with cL:
     recent = db.recent_sightings(30)

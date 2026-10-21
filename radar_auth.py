@@ -10,6 +10,7 @@ Atlas'ın Uçak Gözlem Kulesi - uygulama şifresi.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import time
 
@@ -20,6 +21,14 @@ LOCK_MAX_S = 60
 
 def _norm(s) -> bytes:
   return str(s or "").strip().encode("utf-8")
+
+
+def make_token(expected) -> str:
+  """Şifreden türetilen sabit HMAC anahtarı (URL/yer imi ile cihazda oturumu açık tutmak için)."""
+  exp = _norm(expected)
+  if not exp:
+    return ""
+  return hmac.new(exp, b"atlas-radar-remember-v1", hashlib.sha256).hexdigest()[:20]
 
 
 def check_password(entered, expected) -> bool:
@@ -55,6 +64,18 @@ def gate(st, secret, login_ui=None, now=time.time) -> bool:
     (login_ui or default_login_ui)(st, state)
     return False
 
+  # Cihaz hatırlama anahtarı (query_params içinde geçerli HMAC varsa şifre sormadan aç)
+  qp = getattr(st, "query_params", None)
+  if qp is not None:
+    try:
+      tok = str(qp.get("k") or "").strip()
+      exp_tok = make_token(expected)
+      if tok and exp_tok and hmac.compare_digest(tok.encode("utf-8"), exp_tok.encode("utf-8")):
+        ss["auth_ok"] = True
+        return True
+    except Exception:
+      pass
+
   fails = int(ss.get("auth_fails", 0))
   until = float(ss.get("auth_until", 0.0))
   remaining = max(0, int(round(until - now())))
@@ -71,6 +92,11 @@ def gate(st, secret, login_ui=None, now=time.time) -> bool:
     ss["auth_fails"] = 0
     ss["auth_until"] = 0.0
     ss["auth_error"] = ""
+    if qp is not None and ss.get("auth_remember", True):
+      try:
+        qp["k"] = make_token(expected)
+      except Exception:
+        pass
     st.rerun()
     return True
 
@@ -87,6 +113,12 @@ def gate(st, secret, login_ui=None, now=time.time) -> bool:
 def logout(st):
   for k in ("auth_ok", "auth_fails", "auth_until", "auth_error"):
     st.session_state.pop(k, None)
+  qp = getattr(st, "query_params", None)
+  if qp is not None:
+    try:
+      qp.pop("k", None)
+    except Exception:
+      pass
 
 
 def default_login_ui(st, state):

@@ -1,0 +1,28 @@
+name: Atlas Flight Test Suite
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  unit-and-functional-tests:
+    name: Birim, Fonksiyonel ve Performans Testleri
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Tüm testleri çalıştır (run_all.sh)
+        run: bash tests/run_all.sh
