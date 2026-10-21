@@ -84,7 +84,10 @@ class FakeSt(types.ModuleType):
         if options is not None and v not in options:
             raise StreamlitAPIException(f"{k}: {v!r} seçenekler içinde yok")
         return v
-    def radio(self, label, options, key=None, **k): return self._w(key, label, options[0], list(options))
+    def radio(self, label, options, index=0, key=None, **k):
+        o = list(options)
+        idx = index if (0 <= index < len(o)) else 0
+        return self._w(key, label, o[idx], o)
     def selectbox(self, label, options, index=0, key=None, **k):
         o = list(options); return self._w(key, label, o[index], o)
     def toggle(self, label, value=False, key=None, **k): return self._w(key, label, value)

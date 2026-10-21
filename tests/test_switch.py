@@ -58,5 +58,15 @@ radar.join_background(); H.run()
 ck("logo inince 5 sn döngüsü biter", fake.refresh != 5000, fake.refresh)
 ck("altbilgide zamanlama", "⏱" in "\n".join(fake.md) and "toplam" in "\n".join(fake.md))
 
+# 6) sayfa gezinme (Radar <-> Terminal <-> Defter) doğrulaması
+set_ss("page", P[1]); H.run()
+ck("Terminal sayfasına başarıyla geçildi", fake.session_state["page"] == P[1] and any("Tarife" in m or "Uçuş" in m or "Görünüm" in m or "fids" in str(fake.rendered) for m in fake.md + list(fake.rendered)))
+
+set_ss("page", P[2]); H.run()
+ck("Gözlem defteri sayfasına başarıyla geçildi", fake.session_state["page"] == P[2] and any("Gözlem Defteri" in m or "rozet" in m.lower() for m in fake.md))
+
+set_ss("page", P[0]); H.run()
+ck("Radar sayfasına başarıyla geri dönüldü", fake.session_state["page"] == P[0] and len(SF.calls[-1][0].markers()) >= 1)
+
 print("\nBAŞARISIZ:", FAILS if FAILS else "yok")
 sys.exit(1 if FAILS else 0)

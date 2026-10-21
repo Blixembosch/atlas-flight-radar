@@ -431,12 +431,12 @@ div.stButton>button:hover{border-color:#38bdf8;color:#fff;}
 .st-key-nav [data-testid="stElementContainer"]{margin:0;}
 .st-key-nav [data-testid="stRadio"] [role="radiogroup"]{gap:8px;flex-wrap:wrap;}
 .st-key-nav [data-testid="stRadio"] label{background:#0e1630;border:1px solid var(--line);border-radius:12px;
-  padding:7px 18px;margin:0;cursor:pointer;transition:all .12s ease;}
-.st-key-nav [data-testid="stRadio"] label>div:first-child{display:none;}
-.st-key-nav [data-testid="stRadio"] label p{font-weight:700;font-size:.92rem;color:#cdd5ea;white-space:nowrap;}
+  padding:7px 18px;margin:0;cursor:pointer;transition:all .12s ease;position:relative;}
+.st-key-nav [data-testid="stRadio"] label>div:first-child{position:absolute;opacity:0;width:0;height:0;pointer-events:none;}
+.st-key-nav [data-testid="stRadio"] label p{font-weight:700;font-size:.92rem;color:#cdd5ea;white-space:nowrap;margin:0;}
 .st-key-nav [data-testid="stRadio"] label:hover{border-color:#38bdf8;}
 .st-key-nav [data-testid="stRadio"] label:has(input:checked){background:linear-gradient(120deg,#2b3a9a,#6a35b8);
-  border-color:rgba(255,255,255,.25);}
+  border-color:rgba(255,255,255,.25);box-shadow:0 0 12px rgba(56,189,248,0.25);}
 .st-key-nav [data-testid="stRadio"] label:has(input:checked) p{color:#fff;}
 .st-key-nav [data-testid="stToggle"] p{white-space:nowrap;font-weight:600;font-size:.85rem;}
 
@@ -2450,12 +2450,15 @@ def main():
 
   # 2) Gezinme
   keep({"page": DEFAULT_PAGE, "demo": False})
+  if st.session_state.get("page") not in PAGES:
+    st.session_state["page"] = DEFAULT_PAGE
+  cur_page = st.session_state["page"]
+  page_idx = PAGES.index(cur_page)
+
   with st.container(key="nav"):
     n1, n2, n3 = st.columns([5, 1.5, 1], vertical_alignment="center")
     with n1:
-      if st.session_state["page"] not in PAGES:
-        st.session_state["page"] = DEFAULT_PAGE
-      page = st.radio("Sayfa", PAGES, horizontal=True, key="page", label_visibility="collapsed")
+      page = st.radio("Sayfa", PAGES, index=page_idx, horizontal=True, key="page", label_visibility="collapsed")
     with n2:
       demo = st.toggle("Demo modu", key="demo", help="Gece uçak yokken arayüzü denemek için örnek veri.")
     with n3:
