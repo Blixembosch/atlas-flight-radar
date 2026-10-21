@@ -257,10 +257,15 @@ def select_board(db, direction, now, limit=MIN_ROWS, past_min=45, query="", wind
   """window=(geri_dk, ileri_dk): yalnızca etkin saati (gerçekleşen/tahmini/planlanan) bu aralıktakiler."""
   if window:
     n0 = now.replace(tzinfo=None)
-    rows = db.fids_between(direction, to_iso(now - timedelta(hours=6)), to_iso(now + timedelta(hours=12)))
-    out = [board_row(r, now) for r in rows]
-    out = [r for r in out if (e := _eff(r)) and n0 - timedelta(minutes=window[0]) <= e <= n0 + timedelta(minutes=window[1])]
-    out.sort(key=lambda r: _eff(r))
+    rows = db.fids_between(direction, to_iso(now - timedelta(hours=12)), to_iso(now + timedelta(hours=36)))
+    all_rows = [board_row(r, now) for r in rows]
+    out = [r for r in all_rows if (e := _eff(r)) and n0 - timedelta(minutes=window[0]) <= e <= n0 + timedelta(minutes=window[1])]
+    if not out and not query and all_rows:
+      # Gece saatlerinde (Eindhoven 23:00-07:00 kapalıyken) yakın pencerede uçuş yoksa sıradaki/son uçuşları göster
+      upcoming = [r for r in all_rows if (e := _eff(r)) and e > n0]
+      recent = [r for r in all_rows if (e := _eff(r)) and e <= n0]
+      out = recent[-5:] + upcoming[:limit]
+    out.sort(key=lambda r: _eff(r) or n0)
     if query:
       out = [r for r in out if board_matches(r, query)]
     return out[:limit], len(out)

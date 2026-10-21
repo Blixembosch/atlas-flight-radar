@@ -181,6 +181,12 @@ class GitStore:
       if repo_r.status_code != 200:
         self.last_error = self._explain(repo_r)
         return "error", None
+      try:
+        fn = (repo_r.json() or {}).get("full_name")
+        if fn and "/" in fn:
+          self.repo = fn
+      except Exception:
+        pass
       r = self._contents()
       if r.status_code == 404:
         ref = self._api("GET", f"/repos/{self.repo}/git/ref/heads/{self.branch}")

@@ -104,22 +104,34 @@ OPENSKY_TOKEN_URL = (
 )
 ADSBDB = "https://api.adsbdb.com/v0"
 ADSBLOL_URL = "https://api.adsb.lol/v2/point/{lat}/{lon}/{nm}"  # ücretsiz, anahtarsız yedek kaynak
-OPENSKY_TIMEOUT = 3.5
-OPENSKY_DOWN_S = 900  # OpenSky ulaşılamazsa bu süre boyunca yedek kaynak önce denenir
+OPENSKY_TIMEOUT = 2.2
+OPENSKY_DOWN_S = 1800  # OpenSky ulaşılamazsa bu süre boyunca yedek kaynak (adsb.lol) önce denenir
 _SRC = {"os_down_until": 0.0, "last_source": ""}  # sunucu geneli kaynak durumu
-_HTTP_SESSION = requests.Session() if hasattr(requests, "Session") else None
+_TLS = threading.local()
+
+
+def _session():
+  s = getattr(_TLS, "sess", None)
+  if s is None and hasattr(requests, "Session"):
+    s = requests.Session()
+    _TLS.sess = s
+  return s
 
 
 def _http_get(url, **kw):
-  """Üretimde kalıcı TCP/TLS oturumu (requests.Session) kullanır; testlerde sahte requests.get ile uyumludur."""
-  if _HTTP_SESSION is not None and getattr(requests.get, "__module__", "").startswith("requests"):
-    return _HTTP_SESSION.get(url, **kw)
+  """Üretimde iş parçacığına özel kalıcı TCP/TLS oturumu (requests.Session) kullanır; testlerde sahte requests.get ile uyumludur."""
+  if getattr(requests.get, "__module__", "").startswith("requests"):
+    s = _session()
+    if s is not None:
+      return s.get(url, **kw)
   return requests.get(url, **kw)
 
 
 def _http_post(url, **kw):
-  if _HTTP_SESSION is not None and getattr(requests.post, "__module__", "").startswith("requests"):
-    return _HTTP_SESSION.post(url, **kw)
+  if getattr(requests.post, "__module__", "").startswith("requests"):
+    s = _session()
+    if s is not None:
+      return s.post(url, **kw)
   return requests.post(url, **kw)
 
 
@@ -524,6 +536,10 @@ div.stButton>button:hover{border-color:#38bdf8;color:#fff;}
   .c-pl .fg{font-size:1.1rem;}
   .clock{font-size:1.5rem;}
 }
+/* Yenileme ve sekme geçişlerinde ekranın soluklaşmasını (dimming) engelle */
+[data-stale="true"],[data-testid="stAppViewBlockContainer"] [data-stale="true"],div[data-stale="true"],iframe[data-stale="true"]{
+  opacity:1 !important;filter:none !important;transition:none !important;
+}
 </style>
 """
 
@@ -707,16 +723,15 @@ STALE_OK_S = 120      # sayfa geçişinde ve otomatik yenilemede bu kadar eski v
 
 
 def _traffic_job(key, bearer, radius_km, store, cov_km, overflights):
-  """Arka plan: trafik verisini çeker, hemen önbelleğe yazar ve rota/uçak/logo kayıtlarını ısıtır."""
+  """Arka plan: trafik verisini ve tüm uçakların rota/uçak/logo kayıtlarını ısıtır, ardından önbelleğe yazar."""
   try:
     res = _fetch_states_live(bearer, radius_km)
-    _TCACHE[key] = (time.time(), res)
     if store is not None and res[1] == "ok":
       try:
         attach_logos(build_flights(res[0], store, overflights, cov_km, True), store)
-        _TCACHE[key] = (time.time(), res)
       except Exception:
         pass
+    _TCACHE[key] = (time.time(), res)
   except Exception:
     pass
   finally:
@@ -2011,8 +2026,7 @@ def _flight_to_sighting(f, day):
 
 def page_radar(db, store, demo, refresh_s_box):
   ss = st.session_state
-  keep({"f_over": False, "f_cov": list(COVERAGE)[0], "f_visk": VISIBLE_KM, "f_visa": VISIBLE_ALT_FT,
-        "f_ovk": OVERFLIGHT_KM, "f_unk": False, "f_sound": False, "f_view": "Hepsi", "f_q": ""})
+  keep({"f_over": False, "f_cov": list(COVERAGE)[0], "f_unk": False, "f_sound": False, "f_view": "Hepsi", "f_q": ""})
   auth = "auth" if get_bearer() else "anon"
   active = ss.get("_active", False)
   refresh_s = (REFRESH_ACTIVE if active else REFRESH_IDLE)[auth]
@@ -2045,17 +2059,11 @@ def page_radar(db, store, demo, refresh_s_box):
                                     "uçaklar uzaktan görünür.")
     with f5:
       with st.popover("⚙️"):
-        vis_km = st.slider("Görüş yarıçapı (km)", 2.0, 10.0, step=0.5, key="f_visk",
-                           help="Bu mesafedeki uçaklar 'bahçeden görünür' sayılır.")
-        vis_alt = st.slider("Görünür irtifa (ft)", 2000, 10000, step=500, key="f_visa")
-        ovf_km = st.slider("Geçiş mesafesi (km)", 5, 80, step=5, key="f_ovk",
-                           help="'Üstümüzden geçenler' açıkken evden bu mesafedeki uçaklar gösterilir. "
-                                "Küçük değer = sadece tam tepemizden geçenler.")
+        sound_on = st.toggle("🔔 Bahçe sesli uyarısı", key="f_sound",
+                             help="Bahçenin üstüne uçak girdiğinde kokpit 'ding-dong' anons sesi çalar.")
         show_unknown = st.toggle("Rotası bilinmeyenleri de göster", key="f_unk",
                                  help="Kapalıyken rotası (nereden–nereye) bulunamayan uçaklar listede ve "
                                       "haritada gösterilmez.")
-        sound_on = st.toggle("🔔 Bahçe sesli uyarısı", key="f_sound",
-                             help="Bahçenin üstüne uçak girdiğinde kokpit 'ding-dong' anons sesi çalar.")
     with f1:
       views = ["Hepsi", "Varış", "Kalkış"] + (["Geçiş"] if overflights else [])
       if ss["f_view"] not in views:
@@ -2064,8 +2072,8 @@ def page_radar(db, store, demo, refresh_s_box):
     with f2:
       query = st.text_input("Ara", key="f_q", placeholder="🔍 Ara: HV6710, Transavia, Athens, 737, PH-HXK...",
                             label_visibility="collapsed")
-  remember(["f_over", "f_cov", "f_visk", "f_visa", "f_ovk", "f_unk", "f_sound", "f_view", "f_q"])
-  CFG["visible_km"], CFG["visible_alt"], CFG["overflight_km"] = vis_km, vis_alt, ovf_km
+  remember(["f_over", "f_cov", "f_unk", "f_sound", "f_view", "f_q"])
+  CFG["visible_km"], CFG["visible_alt"], CFG["overflight_km"] = VISIBLE_KM, VISIBLE_ALT_FT, OVERFLIGHT_KM
   cov_km, view_km = COVERAGE[cov_label]
 
   # --- Veri ---
@@ -2077,12 +2085,12 @@ def page_radar(db, store, demo, refresh_s_box):
     status, fetched, mode, raw_n = "ok", time.time(), "demo", len(all_flights)
     runway = {"rwy": "21", "source": "demo", "n": 0}
   else:
-    fetch_km = max(cov_km, ovf_km + 12) if overflights else cov_km  # ev havalimanından ~9 km uzakta
+    fetch_km = max(cov_km, OVERFLIGHT_KM + 12) if overflights else cov_km  # ev havalimanından ~9 km uzakta
     t1 = time.time()
     states, status, fetched = fetch_states(get_bearer(), fetch_km,
                                            allow_stale=COLD_NONBLOCK or bool(ss.get("_switched")),
                                            store=store, cov_km=cov_km, overflights=overflights,
-                                           block=(not COLD_NONBLOCK) or bool(ss.get("_radar_seen")))
+                                           block=not COLD_NONBLOCK)
     if status == "loading":
       refresh_s_box[-1] = 2          # veri gelince hemen çiz (boş harita + "yükleniyor" göster)
     elif status == "ok":
@@ -2151,7 +2159,7 @@ def page_radar(db, store, demo, refresh_s_box):
       "vis": sum(f["visible"] for f in flights),
       "raw": raw_n,
       "hidden": bstats["hidden_unknown"],
-      "refresh": refresh_s,
+      "refresh": refresh_s_box[-1],
   }
 
   # --- Seçili uçağı belirle ---
@@ -2247,6 +2255,28 @@ def _more_rows():
 
 
 
+def warm_terminal(db):
+  """Radar açıkken Terminal tarifesini arka planda ısıtır; Terminal sekmesine geçildiğinde hiç beklemez."""
+  if not db.sync_done.is_set():
+    return
+  key = str(secret("AERODATABOX_KEY", "")).strip()
+  if not key:
+    return
+  host = str(secret("AERODATABOX_HOST", "")).strip() or fids.ADB_HOST
+  try:
+    monthly = int(float(secret("ADB_MONTHLY_UNITS", fids.DEFAULT_MONTHLY_UNITS)))
+  except (TypeError, ValueError):
+    monthly = fids.DEFAULT_MONTHLY_UNITS
+  now = fids.now_local()
+  bs0 = fids.budget_state(db, now, monthly)
+  due, _ = fids.due_for_refresh(db, now, bs0)
+  if due:
+    def _bg():
+      fids.refresh(db, key, fids.now_local(), host=host, monthly_units=monthly)
+      db.maybe_push()
+    _spawn(_bg)
+
+
 def page_terminal(db, store, demo, refresh_s_box):
   ss = st.session_state
   refresh_s_box.append(60)
@@ -2263,12 +2293,6 @@ def page_terminal(db, store, demo, refresh_s_box):
   syncing = not db.sync_done.is_set()          # GitHub'dan kayıtlı veri hâlâ geliyor
   if syncing:
     refresh_s_box[-1] = 2                       # gelince hemen göster
-  if not demo and key and not syncing and db.meta_get("fids_parser") != APP_VERSION:
-    db.meta_set(fids_parser=APP_VERSION)
-    if not db.fids_between("DEP", fids.to_iso(now - timedelta(hours=1)), fids.to_iso(now + timedelta(hours=12))):
-      with st.spinner("Tarife yeni biçimle çekiliyor…"):
-        fids.refresh(db, key, now, host=host, monthly_units=monthly, force=True)
-      db.maybe_push()
   if not demo and key and not syncing:
     bs0 = fids.budget_state(db, now, monthly)
     due, _why = fids.due_for_refresh(db, now, bs0)
@@ -2447,6 +2471,8 @@ def main():
   if page != PAGES[0] and not demo:
     _cov = st.session_state.get("f_cov")
     warm_radar(store, get_bearer(), COVERAGE[_cov if _cov in COVERAGE else list(COVERAGE)[0]][0])
+  elif page == PAGES[0] and not demo and COLD_NONBLOCK:
+    warm_terminal(db)
   fn = {PAGES[0]: page_radar, PAGES[1]: page_terminal, PAGES[2]: page_diary}[page]
   fn(db, store, demo, box)
 

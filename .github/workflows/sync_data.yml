@@ -1,0 +1,37 @@
+name: Arka Plan Tarife Senkronizasyonu (FIDS -> data dalı)
+
+on:
+  schedule:
+    # Eindhoven Havalimanı aktif saatlerinde her 3 saatte bir çalışır (kota bütçeleyicisi ayrıca korur)
+    - cron: "15 5,8,11,14,17,20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-fids-data:
+    name: Eindhoven Tarifesini Çek ve data Dalına Yedekle
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: requests paketini kur
+        run: pip install requests
+
+      - name: Tarifeyi güncelle ve data dalına kaydet
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+          AERODATABOX_KEY: ${{ secrets.AERODATABOX_KEY }}
+          AERODATABOX_HOST: ${{ secrets.AERODATABOX_HOST }}
+          ADB_MONTHLY_UNITS: ${{ secrets.ADB_MONTHLY_UNITS }}
+        run: python3 scripts/sync_fids.py

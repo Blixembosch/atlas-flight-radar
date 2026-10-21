@@ -19,5 +19,12 @@ ok = got == ["just", "now", "late", "soon"] or sorted(got) == sorted(["just", "n
 ok = ok and [r["key"] for r in arr] == ["landed"]
 all_, _ = F.select_board(db, "DEP", now, limit=50)
 ok = ok and "later" in [r["key"] for r in all_]
-print(("OK   " if ok else "FAIL ") + "şimdi penceresi", got, [r["key"] for r in arr])
+
+# Gece saatlerinde (-60..+30 dk içinde hiç uçuş yokken) ekran boş kalmamalı, son/sıradaki uçuşları göstermeli
+db_night = R.RadarDB(os.path.join(tempfile.mkdtemp(), "db", "radar_night.db"))
+db_night.upsert_fids([row("evening", "DEP", -180, "Departed", act=-175), row("morning", "DEP", 480, "Expected")], F.to_iso(now))
+night_dep, _ = F.select_board(db_night, "DEP", now, window=(60, 30))
+ok = ok and [r["key"] for r in night_dep] == ["evening", "morning"]
+
+print(("OK   " if ok else "FAIL ") + "şimdi penceresi ve gece geri dönüşü", got, [r["key"] for r in arr])
 print("\nBAŞARISIZ:", "yok" if ok else "pencere"); sys.exit(0 if ok else 1)
