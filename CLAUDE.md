@@ -1,113 +1,246 @@
-# CLAUDE.md — Atlas'ın Uçak Gözlem Kulesi (Mimari ve Geliştirici Rehberi)
+# CLAUDE.md — Atlas'ın Uçak Gözlem Kulesi (Geliştirici & Mimari Özeti)
 
-Bu belge, **Atlas'ın Uçak Gözlem Kulesi (`v0.4.0`)** projesinin tüm iş mantığını, veri akışını, performans kurallarını, veritabanı mimarisini ve test altyapısını açıklar. Kod tabanında değişiklik yaparken burada belirtilen mimari ilkelere ve kısıtlara uyulmalıdır.
-
----
-
-## 1. Proje Amacı ve Bağlamı
-
-* **Kullanım Senaryosu:** Eindhoven Havalimanı (`EHEH` / `EIN`) kuzey yaklaşma/kalkış koridoru (pist `03/21`, `30°/210°`) üzerinde bulunan **Blixembosch bahçesinden (`51.4950, 5.4750`)** geçen uçakları baba-oğul (Anıl & Atlas) birlikte gerçek zamanlı takip etmek, gökyüzünde hangi yöne bakılacağını görmek ve yakalanan uçakları oyunlaştırılmış bir gözlem defterinde biriktirmek.
-* **Barındırma ve Maliyet Kısıtı:** Uygulama **%100 ücretsiz** servisler üzerinde çalışacak şekilde tasarlanmıştır:
-  * **Sunucu:** Streamlit Community Cloud (ücretsiz, geçici/ephemeral dosya sistemi).
-  * **Kalıcı Depolama:** SQLite (`db/radar.db`) + GitHub REST API üzerinden ana koddan bağımsız `data` dalına (`orphan branch`) otomatik yedekleme ve açılışta geri yükleme.
-  * **Canlı Trafik:** OpenSky Network (birincil) + `adsb.lol` (ücretsiz, anahtarsız, otomatik yedek).
-  * **Uçuş & Gövde Zenginleştirme:** `adsbdb.com` (ücretsiz) + yerel FIDS veritabanı birleştirmesi + `planespotters.net` (ücretsiz fotoğraf).
-  * **Havalimanı Tarifesi (FIDS):** AeroDataBox (RapidAPI Basic ücretsiz plan — ayda ~600 birim kota bütçeleyicili).
-  * **Hava Durumu:** Open-Meteo (ücretsiz, anahtarsız).
+> 🤖 **Otomasyon Notu:** Bu dosya `README.md` ana belgesi ile birleştirilmiştir ve `scripts/sync_docs.py` tarafından otomatik olarak senkronize tutulur. Değişikliklerinizi doğrudan `README.md` üzerinde yapınız.
 
 ---
 
-## 2. Dosya ve Modül Yapısı
+# 🛫 Atlas'ın Uçak Gözlem Kulesi (Atlas Flight Radar)
 
-| Dosya | Sorumluluk |
+[![Atlas Flight Test Suite](https://github.com/Blixembosch/atlas-flight-radar/actions/workflows/tests.yml/badge.svg)](https://github.com/Blixembosch/atlas-flight-radar/actions/workflows/tests.yml)
+[![FIDS Sync](https://github.com/Blixembosch/atlas-flight-radar/actions/workflows/sync_data.yml/badge.svg)](https://github.com/Blixembosch/atlas-flight-radar/actions/workflows/sync_data.yml)
+[![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-v0.5.0-38bdf8.svg)](Radar.py)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](requirements.txt)
+[![Streamlit](https://img.shields.io/badge/streamlit-1.32+-ff4b4b.svg)](https://streamlit.io)
+
+> **Atlas'ın Uçak Gözlem Kulesi**, Eindhoven Havalimanı (**EHEH / EIN**) yaklaşma koridorunda bulunan Blixembosch bahçesinden geçen uçakları gerçek zamanlı izlemek, gökyüzünde başımızı nereye kaldıracağımızı bilmek ve geçen uçakları baba-oğul (Anıl & Atlas) oyunlaştırılmış bir **Anı Defteri**'nde biriktirmek için tasarlanmış **%100 ücretsiz** avionik uçuş takip ve terminal sistemidir.
+
+---
+
+## 📑 İçindekiler
+1. [Proje Hikayesi ve Temel İlkeler](#1-proje-hikayesi-ve-temel-ilkeler)
+2. [Sayfa ve Ekran Mimarisi](#2-sayfa-ve-ekran-mimarisi)
+   - [🛫 1. Terminal Ekranı](#-1-terminal-ekranı)
+   - [📒 2. Gözlem Defteri ve Anı Defteri](#-2-gözlem-defteri-ve-anı-defteri)
+   - [🛰️ 3. Canlı Radar Ekranı](#-3-canlı-radar-ekranı)
+3. [Çekirdek Modüller ve Mimari](#3-çekirdek-modüller-ve-mimari)
+4. [Kalıcı SQL Veritabanı ve `data` Dalı Ayrımı](#4-kalıcı-sql-veritabanı-ve-data-dalı-ayrımı)
+5. [Yönetim ve Otomasyon Araçları (`scripts/`)](#5-yönetim-ve-otomasyon-araçları-scripts)
+6. [GitHub Actions İş Akışları (Workflows)](#6-github-actions-iş-akışları-workflows)
+7. [Bekçi Sistemleri (Guards)](#7-bekçi-sistemleri-guards)
+   - [🛡️ Kapsam Bekçisi](#️-kapsam-bekçisi)
+   - [🛡️ Doküman Bekçisi](#️-doküman-bekçisi)
+8. [Sıfır Bloklamalı Performans ve Önbellek Mimarisi](#8-sıfır-bloklamalı-performans-ve-önbellek-mimarisi)
+9. [Test Altyapısı ve Kalite Standartları](#9-test-altyapısı-ve-kalite-standartları)
+10. [Kurulum, Yapılandırma ve Dağıtım](#10-kurulum-yapılandırma-ve-dağıtım)
+
+---
+
+## 1. Proje Hikayesi ve Temel İlkeler
+
+* **Kullanım Senaryosu:** Eindhoven Havalimanı (`EHEH` / `EIN`) kuzey yaklaşma/kalkış koridoru (pist `03/21`, `30°/210°`) üzerindeki bahçemizden (`51.4950, 5.4750`) gökyüzüne baktığımızda geçen uçakları canlı harita üzerinde görmek, kerteriz ve bakış açısını (**Gökyüzü Pusulası**) anında okumak, bahçe üstüne yeni uçak girdiğinde kokpit anons çanı duymak ve uçakları koleksiyon rozetleri kazandıran bir **Anı Defteri**'ne kaydetmektir.
+* **Sıfır Maliyet Kuralı:** Sistem yalnızca ücretsiz veya cömert ücretsiz katmanlara sahip servislerle çalışır:
+  - **Sunucu:** Streamlit Community Cloud (ücretsiz, geçici/ephemeral dosya sistemi).
+  - **Kalıcı Depolama:** GitHub REST API üzerinden ana kod dalından (`main`) bağımsız `data` dalında (`orphan branch`) tutulan düz metin ANSI SQL dökümü (`db/radar.sql`) ve SQLite ikili dosyası (`db/radar.db`).
+  - **Canlı Konum:** OpenSky Network (birincil) + `adsb.lol` (otomatik yedek, anahtarsız).
+  - **Uçuş & Rota Zenginleştirme:** `adsbdb.com` + yerel FIDS tarifesi füzyonu + `planespotters.net` (fotoğraf).
+  - **Terminal Tarifesi (FIDS):** AeroDataBox (RapidAPI Basic ücretsiz plan, aylık kota bütçeleyicili).
+  - **Hava Durumu:** Open-Meteo (ücretsiz, anahtarsız).
+
+---
+
+## 2. Sayfa ve Ekran Mimarisi
+
+Uygulama 3 temel sayfadan oluşur. Açılış doğrudan en hafif ve hızlı sayfa olan Terminal ile gerçekleşir:
+
+```
+PAGES = ["🛫 Terminal", "📒 Gözlem Defteri", "🛰️ Radar"]
+```
+
+### 🛫 1. Terminal Ekranı
+* **Eindhoven Airport (EIN · EHEH) FIDS Panosu:** Varış (`🛬 Varış`) ve Kalkış (`🛫 Kalkış`) uçuşları bağımsız iki panelde, varsayılan 20 (60'a kadar genişletilebilir) uçuş olarak listelenir.
+* **Görünümler:**
+  - **Şimdi:** Son 60 dakika içinde inen/kalkan + aktif uçuşlar + önümüzdeki 30 dakikalık seferler.
+  - **Tüm Gün:** Günün ilk seferinden son seferine kadar tüm tarife.
+* **Avionik Detaylar:** Havayolu logoları, ülke bayrakları, hedef/kalkış şehri, kapı (`Gate`) numarası, durum (`Expected`, `Landed`, `Departed`) ve rötar dakikaları.
+* **Sıfır Bloklamalı Açılış:** GitHub veya harici AeroDataBox servisini beklemeden 0.01 sn içinde anında render edilir.
+
+### 📒 2. Gözlem Defteri ve Anı Defteri
+* **Otomatik & Manuel Kayıt:** Bahçe görüş alanına (`dist_home ≤ 4.0 km` ve `alt_ft ≤ 5.000 ft`) giren tüm uçaklar otomatik olarak SQLite veritabanına ve GitHub `data` dalına kaydedilir. İstenirse Radar detay kartındaki **📖 Gözlem Defterine Kaydet** düğmesiyle manuel de eklenebilir.
+* **🏅 Uçak Avcısı Rütbe Sistemi:** Yakalanan uçak sayısına göre 5 farklı rütbe seviyesi verilir:
+  1. 🐣 *Meraklı Gözlemci* (1–4 uçak)
+  2. 🔭 *Bahçe Gözcüsü* (5–14 uçak)
+  3. 🛩️ *Hava Trafik Uzmanı* (15–29 uçak)
+  4. 👨‍✈️ *Baş Pilot* (30–49 uçak)
+  5. 🏆 *Gökyüzü Efsanesi* (50+ uçak)
+* **🎖️ 8 Rozetlik Avcı Koleksiyonu:**
+  - **İlk Av:** İlk uçağını deftere kaydettin!
+  - **Keskin Göz:** 10 farklı uçak yakaladın.
+  - **Dünya Turu:** 5 farklı ülkeden gelen uçuş gördün.
+  - **Filo Uzmanı:** 3 farklı uçak modeli tanıdın.
+  - **Alçak Uçuş:** 2.000 ft altına inen uçağı yakaladın.
+  - **Tam Tepemizde:** Bahçeye 2 km'den yakın geçen uçuş.
+  - **Sadık Gözcü:** 3 farklı günde gözlem yaptın.
+  - **Kule Efsanesi:** 50 uçakla gökyüzü efsanesi oldun!
+* **Anı Defteri Görsel Paneli:** Bugün / Son 7 Gün / Toplam uçak KPI sayaçları, son 7 günün çubuk grafiği ve son gözlemler tablosu (Terminal ile tam uyumlu elektrik gök mavisi `#38bdf8` kokpit teması).
+
+### 🛰️ 3. Canlı Radar Ekranı
+* **Canlı Harita & 500 ms Kayma Animasyonu:** Sunucudan yeni veri gelmesini beklemeden hız ve kerteriz vektörlerine göre uçakların akıcı süzüldüğü Leaflet / Pydeck (WebGL) harita motoru (`MOTION_JS`).
+* **Bahçe Önceliği:** Bahçe görüş alanındaki uçaklar asla gizlenmez. Rotası bilinmeyen uçaklar bile (askeri nakliye, Lifeliner hava ambulansı, polis helikopteri) ekranda tutulur.
+* **🧭 Gökyüzü Pusulası & Bakış Açısı:** Uçağın bahçemize göre hangi yönde (*Kuzeydoğu ↗* vb.) ve ufuktan kaç derece yukarıda olduğunu hesaplar:
+  - `≥ 45°`: *"🦅 Tam tepemizde! Başını yukarı kaldır"*
+  - `20°–44°`: *"👀 Gökyüzünde orta yükseklikte"*
+  - `8°–19°`: *"🌲 Ağaçların / çatıların üstünde"*
+  - `< 8°`: *"🌅 Ufuk çizgisine yakın"*
+* **🧒 Çocuk Dostu Kıyaslamalar:** 50+ uçak tipi için eğlenceli bilgiler ve uçağın o anki hız ve irtifasını Formula 1 aracı, çita, Eyfel Kulesi ve Burj Khalifa ile kıyaslayan canlı kutu.
+* **🔔 Bahçe Sesli Uyarısı:** Bahçe üstüne yeni bir uçak girdiğinde tarayıcının Web Audio API sentezleyicisi ile çift tonlu kokpit anons çanı (*587 Hz → 440 Hz*) çalar.
+* **🔗 Terminal + Radar Füzyonu:** `adsbdb`'de yer almayan Avrupa charter ve düşük maliyetli uçuşların şehir, saat, rötar ve kapı bilgisi yerel Terminal (`fids_flights`) veritabanından tamamlanır.
+
+---
+
+## 3. Çekirdek Modüller ve Mimari
+
+| Modül | Görev ve Sorumluluk |
 |---|---|
-| `Radar.py` | Ana Streamlit uygulaması, koyu tema CSS sistemi, canlı radar veri katmanı (`fetch_states`, `build_flights`, `enrich_geometry`), Folium/Leaflet harita + 500 ms istemci tarafı hareket motoru (`MOTION_JS`), Web Audio API sesli uyarı (`chime_script_html`) ve 3 sayfa (`page_radar`, `page_terminal`, `page_diary`). |
-| `radar_db.py` | SQLite (`RadarDB`) veri erişim katmanı, bellek içi `meta` ve `fids_lookup_map` önbellekleri, gözlem defteri (`sightings`) istatistikleri, kota (`api_usage`) kayıtları ve GitHub `data` dalı (`BranchSync`) senkronizasyonu. |
-| `radar_fids.py` | Eindhoven Terminal (FIDS) motoru: AeroDataBox API istemcisi, aylık kota bütçe hesaplayıcısı (`budget_state`, `due_for_refresh`), esnek JSON ayrıştırıcı (`parse_fids_payload`), "Şimdi" (`-60/+30 dk`) ve "Tüm gün" görünüm seçicisi (`select_board`). |
-| `radar_auth.py` | Şifre kapısı (`require_login`), sabit zamanlı karşılaştırma (`hmac.compare_digest`), yanlış şifre hız sınırlaması (3 hatada 5 sn kilit) ve mobil/tablet yer imleri için URL token (`?k=<hmac_token>`) doğrulaması (`make_token`). |
-| `db/schema.sql` | SQLite veritabanı şeması (`meta`, `fids_flights`, `sightings`, `api_usage`, `fetch_log`). |
-| `tests/` | İnternetsiz çalışan deterministik test paketi (`harness3.py`, `run_all.sh`, `test_perf.py`, `test_app.py`, `test_radar_flow.py`, `test_fids.py`, `test_db_auth.py`, `test_default_page.py` vb.). |
+| [`Radar.py`](Radar.py) | Ana Streamlit uygulaması, sayfa render döngüsü, oturum durumu (`session_state`), canlı radar veri entegrasyonu (`fetch_states`, `build_flights`), WebGL harita ve 3 sayfa kontrolü. |
+| [`radar_db.py`](radar_db.py) | SQLite (`RadarDB`) veri erişim katmanı, düz metin ANSI SQL dökümü (`dump_sql`, `restore_sql`), bellek içi TTL önbelleği (`_stats_cache`, `_recent_cache`), GitHub `data` dalı çift formatlı senkronizasyonu (`GitStore`). |
+| [`radar_fids.py`](radar_fids.py) | Eindhoven FIDS tarifesi motoru: AeroDataBox API istemcisi, kota bütçeleyicisi (`budget_state`), JSON ayrıştırıcı (`parse_adb`), "Şimdi" ve "Tüm gün" filtreleri. |
+| [`radar_config.py`](radar_config.py) | Havalimanı ve bahçe koordinatları, yaklaşma koridoru açıları, çocuk kıyaslama metinleri, uçak tipleri, koltuk kapasiteleri ve hava durumu sabitleri. |
+| [`radar_styles.py`](radar_styles.py) | Koyu havacılık teması, cam morfizm kartlar, yüksek kontrastlı tipografi (WCAG AA), responsive grid ve dinamik havayolu CSS sınıfları (`fids_logo_css`). |
+| [`radar_auth.py`](radar_auth.py) | Güvenlik kapısı (`gate`), sabit zamanlı şifre karşılaştırması (`hmac.compare_digest`), 3 yanlışta 5 sn kilit, mobil ana ekran için URL token (`?k=`) desteği. |
+| [`radar_motion.py`](radar_motion.py) | Leaflet Motion animasyon motoru ve Pydeck WebGL radar katmanı yapılandırmaları. |
 
 ---
 
-## 3. Uçtan Uca Çalışma Mantığı
+## 4. Kalıcı SQL Veritabanı ve `data` Dalı Ayrımı
 
-### 3.1. Giriş ve Kimlik Doğrulama (`radar_auth.py`)
-1. `secrets.toml` içinde `APP_PASSWORD` tanımlı değilse uygulama güvenlik nedeniyle **kilitli** kalır ve hiçbir dış API çağrısı yapmaz.
-2. Kullanıcı doğru şifreyi girdiğinde `st.session_state["auth_ok"] = True` olur ve `st.query_params["k"] = make_token(APP_PASSWORD)` (SHA-256 tabanlı 16 karakterlik HMAC özeti) URL'ye yazılır.
-3. Kullanıcı bu URL'yi telefon/tablet ana ekranına eklediğinde sonraki açılışlarda `?k=...` parametresi doğrulanarak şifre ekranı otomatik geçilir.
+Streamlit Community Cloud geçici kapsayıcılarda (*ephemeral containers*) çalıştığı için her dağıtımda yerel disk sıfırlanır. Veri kaybını önlemek ve ana kod tabanını veri dosyalarından tamamen bağımsız tutmak için:
 
-### 3.2. Sıfır Bloklamalı (Non-Blocking) Performans Mimarisi
-Streamlit her kullanıcı etkileşiminde betiği baştan sona yeniden çalıştırır. Arayüzün asla donmaması için şu kurallar uygulanır:
-1. **Kalıcı HTTP Havuzu (`_HTTP_SESSION`):** Tüm dış istekler `_http_get` ve `_http_post` üzerinden `requests.Session()` ile yapılır; TCP ve TLS el sıkışmaları yeniden kullanılır (testlerde `requests.get` monkeypatch edildiğinde otomatik algılanıp sahte fonksiyona yönlendirilir).
-2. **İki Aşamalı Arka Plan Trafik Çekme (`fetch_states` & `_traffic_job`):**
-   * İlk açılışta (`COLD_NONBLOCK = True`, `block = False`) veri henüz yoksa ekran **beklemez**: boş harita ve *"Canlı hava trafiği yükleniyor…"* mesajı `0.01 sn` içinde çizilir, yenileme süresi geçici olarak `2 sn` yapılır.
-   * Arka plan iş parçacığı (`_traffic_job`), OpenSky veya `adsb.lol`'dan ham konumları alır almaz (rota ve logo indirmelerini beklemeden!) `_TCACHE[key]` önbelleğini günceller; ardından `build_flights` ve `attach_logos` ile önbelleği ısıtır.
-   * Sonraki tüm çizimlerde `allow_stale=True` kullanılır: önbellekteki veri `FETCH_TTL` (8 sn) süresini aşmış ama `STALE_OK_S` (180 sn) içindeyse mevcut veri **anında** döndürülür ve tazeleme arka planda başlatılır.
-3. **Beklemesiz Yan Kaynaklar (`fetch_weather`, `peek_logo`, `peek_photo`):**
-   * Hava durumu (Open-Meteo), havayolu logoları ve uçak fotoğrafları (`planespotters.net`) ana çizim iş parçacığını **asla bloklamaz**. Önbellekte yoksa arka plan iş parçacığı başlatılır ve mevcut çizim hemen tamamlanır.
-4. **SQLite ve Bellek Önbelleği (`radar_db.py`):**
-   * `PRAGMA journal_mode=DELETE` yalnızca `init_schema()` içinde bir kez çalışır; her okuma bağlantısında tekrarlanmaz.
-   * `meta_get` çağrıları `_meta_cache` sözlüğünden sıfır disk G/Ç ile okunur.
-   * `fids_lookup_map` sonucu veritabanı yazma sayacına (`_write_seq`) bağlı olarak bellekte tutulur; `fids_flights` tablosu değişmedikçe yeniden sorgulanmaz.
+```
+[GitHub Repo]
+  ├── main (Yalnızca kaynak kod, testler ve şema DDL; sıfır veri kirliliği)
+  └── data (Orphan Branch: Kalıcı Veritabanı ve Döküm)
+        ├── db/radar.sql  -> İnsan tarafından okunabilir ANSI SQL dökümü (iterdump)
+        ├── db/radar.db   -> SQLite ikili veritabanı (anında açılış için)
+        └── db/schema.sql -> Tablo DDL tanımları
+```
 
-### 3.3. Canlı Trafik Kaynakları ve Otomatik Yedekleme (`_fetch_states_live`)
-* Varsayılan mod (`TRAFFIC_SOURCE = "auto"`):
-  1. Önce **OpenSky Network** (`OPENSKY_TIMEOUT = 3.5 sn`) denenir.
-  2. Bulut sunucularında OpenSky IP engeli/zaman aşımı yaşanması durumunda `_SRC["os_down_until"] = now + 900` (15 dakika) işaretlenir ve anında ücretsiz **`adsb.lol`** (`api.adsb.lol/v2/point/{lat}/{lon}/{nm}`) servisine geçilir.
-  3. `adsblol_to_states()` fonksiyonu `readsb` JSON çıktısını OpenSky `state vector` dizisine dönüştürür (knot → m/s, ft/dk → m/s dikey hız, yerde/telsiz kulesi filtreleri).
-
-### 3.4. Uçak Seçimi ve 3 Kaynaklı Veri Birleştirme (`_candidates` & `build_flights`)
-1. **Aday Filtresi (`_candidates`):**
-   * `near`: Eindhoven'a `≤ 50 km` ve `≤ 10.000 ft` irtifa.
-   * `inbound`: `50 km < mesafe ≤ kapsama (50/100/200 km)`, `≤ 22.000 ft`, alçalan (`vrate ≤ -1.0 m/s`) ve burnu havalimanına dönük (`angle_diff ≤ 30°`).
-   * `transit`: "Üstümüzden geçenler" (`f_over`) açıkken bahçeye `≤ 30 km` mesafedeki yüksek irtifa uçuşları.
-2. **3 Kaynaklı Zenginleştirme:**
-   * **Kaynak 1 — `adsbdb`:** Çağrı kodundan rota (`/v0/callsign/{cs}`) ve ICAO24 hex kodundan gövde/tescil (`/v0/aircraft/{hex}`) bilgileri `ThreadPoolExecutor(12)` ile paralel çekilir ve `store` içinde önbelleklenir (başarılı rota 1 saat, uçak 24 saat, geçici ağ hatası `_state: "err"` 20 sn).
-   * **Kaynak 2 — Terminal (FIDS) Füzyonu (`_match_fids`):** `adsbdb` birçok Avrupa charter/düşük maliyetli uçuşunu bilmez. `build_flights`, yerel SQLite veritabanındaki `fids_flights` tablosunu çağrı kodu (`TRA6672`), ICAO→IATA dönüşümü (`TRA6672 → HV6672`) ve kuyruk tescili (`PH-HXA`) ile tarar. Eşleşme bulunduğunda:
-     * Kalkış/varış havalimanı, şehir ve ülke bayrağı tamamlanır (`route_known = True`).
-     * Uçağın planlanan/tahmini saati, rötar durumu ve kapı (`gate`) bilgisi `f["fids"]` alanına eklenerek Radar detay kartında gösterilir.
-   * **Kaynak 3 — Askeri / Hava Ambulansı / Polis Koruması (`SPECIAL_PREFIXES`, `SPECIAL_TYPES`):** Eindhoven hem sivil havalimanı hem de askeri hava üssüdür. `NAF` (Hollanda Hava Kuvvetleri), `MMF` (NATO MRTT), `LIF`/`ANW` (Lifeliner Hava Ambulansı), `ZXP` (Polis Helikopteri) çağrı kodları ve `C130`, `A400`, `F35`, `EC35` gibi özel tipler `adsbdb`'de rotası olmasa bile gizlenmez.
-
-### 3.5. Baba-Oğul Etkileşim Özellikleri
-* **🧭 Gökyüzü Pusulası (`enrich_geometry`):**
-  * Evin koordinatından uçağın koordinatına kerteriz açısı (`from_home`) hesaplanır ve 8 yönden birine (`Kuzey ⬆️`, `Kuzeydoğu ↗️` vb.) çevrilir.
-  * Uçağın irtifası (metre) ve yatay uzaklığından (`dist_home`) dikey bakış açısı $\text{elev} = \arctan(\text{alt\_m} / \text{dist\_m})$ derece cinsinden hesaplanır:
-    * `≥ 45°`: *"🦅 Tam tepemizde! Başını yukarı kaldır"*
-    * `20°–44°`: *"👀 Gökyüzünde orta yükseklikte"*
-    * `8°–19°`: *"🌲 Ağaçların / çatıların üstünde"*
-    * `< 8°`: *"🌅 Ufuk çizgisine yakın"*
-* **🧒 Çocuk Dostu Kıyaslamalar (`kid_comparison` & `AIRCRAFT_TYPES`):**
-  * 50+ uçak tipi için çocuk dilinde ilginç bilgiler ve uçağın o anki hız/irtifasını Formula 1 aracı, çita, Eyfel Kulesi veya Burj Khalifa ile kıyaslayan dinamik kutu.
-* **🔔 Sesli Bahçe Uyarısı (`chime_script_html`):**
-  * Harici ses dosyasına ihtiyaç duymadan tarayıcının `AudioContext` (Web Audio API) sentezleyicisi ile `587.33 Hz (D5) → 440 Hz (A4)` çift tonlu kokpit anons çanı üretir. Aynı uçak için tekrar tekrar çalmaması adına `st.session_state["_last_chime_id"]` ile tekilleştirilir.
-* **🏅 Gözlem Defteri ve Rozet Sistemi (`page_diary` & `badges_html`):**
-  * Bahçe görüş küresine (`dist_home ≤ 4.0 km` ve `alt_ft ≤ 5.000 ft`) giren uçaklar otomatik olarak `sightings` tablosuna kaydedilir; ayrıca Radar detay kartındaki **"📖 Gözlem Defterine Kaydet"** düğmesiyle manuel kayıt yapılabilir.
-  * Toplam yakalanan uçak sayısına göre 5 rütbe (*🐣 Meraklı Gözlemci → 🔭 Bahçe Gözcüsü → 🛩️ Hava Trafik Uzmanı → 👨‍✈️ Baş Pilot → 🏆 Gökyüzü Efsanesi*) ve 8 rozet (*İlk Av, Keskin Göz, Dünya Turu, Filo Uzmanı, Alçak Uçuş, Tam Tepemizde, Sadık Gözcü, Kule Efsanesi*) hesaplanır.
-
-### 3.6. Terminal (FIDS) ve Kota Bütçeleyicisi (`radar_fids.py`)
-* AeroDataBox çağrısı başına 2 kota birimi harcar (`withLeg=true` ile tek çağrıda hem varış hem kalkış, 12 saatlik pencere).
-* `budget_state(db, now, monthly_units=600)`: Aylık kotanın `%10`'unu güvenlik payı olarak ayırır (`cap = 540`). Ayın kalan saatine ve kalan kotaya göre yenileme aralığını `1 saat` ile `12 saat` arasında dinamik hesaplar.
-* Gece `00:00–05:00` (Hollanda saati) arasında Eindhoven'da tarifeli uçuş olmadığı için otomatik API çağrısı yapılmaz.
-
-### 3.7. Veritabanı ve GitHub `data` Dalı Eşitleme (`radar_db.py`)
-* `BranchSync`:
-  * Açılışta `pull_if_empty()` arka plan iş parçacığında çalışır (`background=True`); yerel veritabanı boşsa GitHub `data` dalındaki `db/radar.db` indirilir.
-  * İndirme sırasında kullanıcı yerel veritabanına yeni kayıt yazmışsa ezilmez; `merge_from()` ile uzak ve yerel tablolar (`fids_flights`, `sightings`, `api_usage`) güvenli şekilde birleştirilir (`MIN(min_km)`, `MAX(units)`).
-  * **Güvenlik Kuralı:** `pull_ok` bayrağı `True` olmadan `push()` asla uzaktaki `data` dalının üzerine yazmaz (ağ hatası durumunda uzaktaki yedeğin sıfırlanmasını önler).
+* **`.gitignore` Koruması:** `*.db`, `*.db-journal`, `db/radar.sql` ana dala asla girmez.
+* **Tutarlı SQL Dökümü (`dump_sql`):** Canlı yazmalarla çakışmayı önlemek için önce bellek içine (`con.backup`) anlık kopya alınır ve `iterdump()` ile standart SQL dökümü üretilir.
+* **Güvenli Geri Yükleme (`restore_sql`):** SQL dökümünü geçici dosyada kurup `PRAGMA integrity_check` doğrulaması yaptıktan sonra atomik olarak yerine koyar.
+* **Çift Formatlı Eşitleme:** Otomatik senkronizasyon çalıştığında hem `db/radar.sql` hem de `db/radar.db` `data` dalına yazılır.
 
 ---
 
-## 4. Test Altyapısı ve Geliştirme Kuralları
+## 5. Yönetim ve Otomasyon Araçları (`scripts/`)
 
-Tüm testler internet bağlantısı olmadan, sahte (`mock`) Streamlit, Folium, Requests ve GitHub katmanlarıyla çalışır:
+### Veritabanı Yönetimi ([`scripts/manage_db.py`](scripts/manage_db.py))
+```bash
+# 1. Yerel DB, SQL dökümü ve GitHub data dalı durumunu incele
+python3 scripts/manage_db.py status
+
+# 2. Yerel veritabanından db/radar.sql dökümü oluştur
+python3 scripts/manage_db.py dump
+
+# 3. db/radar.sql dökümünden SQLite veritabanını yeniden kur
+python3 scripts/manage_db.py restore
+
+# 4. GitHub data dalındaki son DB ve SQL dökümünü çek
+python3 scripts/manage_db.py pull
+
+# 5. Yerel DB ve SQL dökümünü GitHub data dalına anında yükle
+python3 scripts/manage_db.py push
+```
+
+### Arka Plan Tarife Eşitlemesi ([`scripts/sync_fids.py`](scripts/sync_fids.py))
+Eindhoven Havalimanı tarifesini çeker, kota bütçesini kontrol eder ve `data` dalındaki veritabanını günceller.
+
+### Dokümantasyon Otomasyonu ([`scripts/sync_docs.py`](scripts/sync_docs.py))
+Projedeki tüm modülleri inceler, Doküman Bekçisi standartlarına göre `README.md` dosyasının eksiksizliğini doğrular ve `CLAUDE.md` ile `README.md` dosyalarını otomatik senkronize tutar.
+
+---
+
+## 6. GitHub Actions İş Akışları (Workflows)
+
+1. **`Atlas Flight Test Suite` ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)):**
+   - Her `push` ve `pull_request` anında çalışır.
+   - 18 farklı birim, fonksiyonel, performans ve bekçi testini internetsiz deterministik ortamda çalıştırır.
+2. **`Arka Plan Tarife Senkronizasyonu` ([`.github/workflows/sync_data.yml`](.github/workflows/sync_data.yml)):
+   - Eindhoven Havalimanı aktif saatlerinde her 3 saatte bir (`cron: "15 5,8,11,14,17,20 * * *"`) çalışır.
+   - `python3 scripts/sync_fids.py` çalıştırarak `data` dalındaki `db/radar.sql` ve `db/radar.db` dosyalarını günceller.
+
+---
+
+## 7. Bekçi Sistemleri (Guards)
+
+Sistem kalitesini korumak için projeye iki temel otomatik bekçi dahil edilmiştir:
+
+### 🛡️ Kapsam Bekçisi ([`tests/test_kapsam_bekcisi.py`](tests/test_kapsam_bekcisi.py))
+> **Kural:** *"Her fonksiyon en az bir testte çalışmalı; yeni fonksiyon testsiz eklenince kırmızıya döner."*
+- Python `ast` (Abstract Syntax Tree) modülü ile projedeki tüm fonksiyonları tarar.
+- `tests/test_*.py` altındaki testlerde referansı bulunmayan fonksiyon tespit edildiğinde testi fail eder ve eksik fonksiyonları listeler.
+
+### 🛡️ Doküman Bekçisi ([`tests/test_dokuman_bekcisi.py`](tests/test_dokuman_bekcisi.py))
+> **Kural:** *"Bu README.md her sayfayı, çekirdek modülü, aracı, workflow'u ve Anı Defteri modülünü/sekmesini kapsamalı."*
+- `README.md` dosyasını tarayarak tüm zorunlu sayfaların, modüllerin, yönetim araçlarının, iş akışlarının ve Anı Defteri bileşenlerinin dokümanda tam olarak yer aldığını denetler.
+
+---
+
+## 8. Sıfır Bloklamalı Performans ve Önbellek Mimarisi
+
+* **Kalıcı HTTP Havuzu:** Tüm dış istekler `_session()` ile kalıcı TCP/TLS havuzunda tutulur; el sıkışma gecikmeleri önlenir.
+* **SQLite Bellek İçi TTL Önbellek:** `radar_db.py` içindeki `_stats_cache` (30 sn) ve `_recent_cache` (15 sn) sayesinde Gözlem Defteri her tıklandığında diske gitmez, sayfalar arası geçiş **0.1 ms – 1.8 ms** seviyesindedir.
+* **Asenkron Hava Durumu ve Görseller:** Open-Meteo, havayolu logoları ve uçak fotoğrafları arka planda indirilir; ana sayfa çizimi sıfır milisaniye gecikmeyle açılır.
+
+---
+
+## 9. Test Altyapısı ve Kalite Standartları
+
+Tüm testler sahte (`mock`) Streamlit, Folium, Requests ve GitHub katmanlarıyla internetsiz çalışır:
 
 ```bash
 bash tests/run_all.sh
 ```
 
-* **`tests/harness3.py`:** Gerçek Streamlit'in katı kurallarını taklit eder:
-  * Bir bileşen çizildikten sonra aynı çalıştırmada `session_state[key]` değiştirilirse `StreamlitAPIException` fırlatır.
-  * O çalıştırmada çizilmeyen sekme bileşenlerinin anahtarlarını `session_state`'ten siler (bu yüzden sayfa geçişlerinde korunması gereken değerler `keep()` ve `remember()` ile `_saved` sözlüğünde saklanır).
-* **`tests/test_perf.py`:** Ağ gecikmelerini (OpenSky zaman aşımı, GitHub indirme süresi, yavaş hava durumu/logo servisleri) simüle ederek her ekran çiziminin milisaniyeler içinde tamamlandığını doğrular.
-* **Önemli Kural:** Yeni bir dış HTTP çağrısı eklerken doğrudan `requests.get` yerine `Radar.py` içindeki `_http_get` / `_http_post` yardımcılarını kullanın; böylece hem üretimde `requests.Session()` bağlantı havuzu kullanılır hem de `harness3.py` test yakalayıcısı bozulmaz.
+* [`tests/harness3.py`](tests/harness3.py): Streamlit'in yaşam döngüsünü taklit eder (yeniden çizimlerde kaybolmaması gereken anahtarlar `keep()` ile korunur).
+* [`tests/test_page_flow_perf.py`](tests/test_page_flow_perf.py): Sayfa geçiş sürelerini ölçer (hedef: < 200 ms, ortalama < 50 ms).
+* [`tests/test_sql_db_sync.py`](tests/test_sql_db_sync.py): SQL dökümü ve `data` dalı senkronizasyonunu test eder.
+* [`tests/test_kapsam_bekcisi.py`](tests/test_kapsam_bekcisi.py): Fonksiyon kapsamını doğrular.
+* [`tests/test_dokuman_bekcisi.py`](tests/test_dokuman_bekcisi.py): Dokümantasyon bütünlüğünü doğrular.
+
+---
+
+## 10. Kurulum, Yapılandırma ve Dağıtım
+
+### Yerel Çalıştırma
+```bash
+# 1. Depoyu klonlayın
+git clone https://github.com/Blixembosch/atlas-flight-radar.git
+cd atlas-flight-radar
+
+# 2. Sanal ortamı kurun ve etkinleştirin
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 3. Bağımlılıkları yükleyin
+pip install -r requirements.txt
+
+# 4. secrets.toml dosyasını oluşturun
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+
+# 5. Uygulamayı başlatın
+streamlit run Radar.py
+```
+
+### Secrets Parametreleri (`secrets.toml`)
+
+| Secret | Zorunlu mu? | Açıklama |
+|---|---|---|
+| `APP_PASSWORD` | **Evet** | Uygulama açılış şifresi |
+| `AERODATABOX_KEY` | Önerilir | Eindhoven FIDS tarifesi için RapidAPI anahtarı |
+| `GITHUB_TOKEN` | Önerilir | Veritabanını `data` dalına yedeklemek için Fine-Grained Token (*Contents: Read & Write*) |
+| `GITHUB_REPO` | Önerilir | Depo adı (`Blixembosch/atlasradar`) |
+| `DATA_BRANCH` | İsteğe bağlı | Veritabanı dalı (Varsayılan: `data`) |
+| `DATA_SQL_PATH` | İsteğe bağlı | SQL döküm yolu (Varsayılan: `db/radar.sql`) |
+| `DATA_DB_PATH` | İsteğe bağlı | SQLite yolu (Varsayılan: `db/radar.db`) |
+| `TRAFFIC_SOURCE` | İsteğe bağlı | `auto` (OpenSky → `adsb.lol`), `opensky` veya `adsblol` |
+| `HOME_LAT`, `HOME_LON` | İsteğe bağlı | Bahçe koordinatları (Varsayılan: `51.4950`, `5.4750`) |
