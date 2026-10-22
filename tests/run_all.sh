@@ -14,4 +14,4 @@ python3 tests/test_window.py
 python3 tests/test_default_page.py
 python3 tests/test_warm.py
 python3 tests/test_perf.py
-
+python3 tests/test_functional_modular.py
