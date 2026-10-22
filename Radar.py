@@ -286,7 +286,6 @@ def _from_adsblol(radius_km):
 
 
 _TCACHE = {}          # (bearer, yarıçap) -> (zaman, sonuç)   (tüm oturumlar için ortak)
-_FLIGHTS_CACHE = {}   # (fetched, overflights, cov_km, show_unknown) -> (all_flights, bstats)
 _LAST_SIGHTINGS = {"sig": None, "t": 0.0}
 _LAST_WARM_TERM = 0.0
 STALE_OK_S = 120      # sayfa geçişinde ve otomatik yenilemede bu kadar eski veri anında gösterilir, arka planda tazelenir
@@ -1770,25 +1769,13 @@ def page_radar(db, store, demo, refresh_s_box):
     tm["veri"] = time.time() - t1
     raw_n = len(states)
     t1 = time.time()
-    if not _TCACHE:
-      _FLIGHTS_CACHE.clear()
-    states_sig = tuple(s[0] for s in states) if states else ()
-    cache_k = (fetched, overflights, cov_km, show_unknown, states_sig)
-    hit_fl = _FLIGHTS_CACHE.get(cache_k)
-    if hit_fl is not None:
-      all_flights, bstats = hit_fl
-    else:
-      now_loc = fids.now_local()
-      minute_bucket = (now_loc.minute // 5) * 5
-      bucket_time = now_loc.replace(minute=minute_bucket, second=0, microsecond=0)
-      fids_map = db.fids_lookup_map(fids.to_iso(bucket_time - timedelta(hours=3)),
-                                    fids.to_iso(bucket_time + timedelta(hours=6)))
-      all_flights = attach_logos(
-          build_flights(states, store, overflights, cov_km, show_unknown, bstats, fids_map=fids_map), store)
-      _FLIGHTS_CACHE[cache_k] = (all_flights, dict(bstats))
-      if len(_FLIGHTS_CACHE) > 8:
-        for old_k in list(_FLIGHTS_CACHE)[:-4]:
-          _FLIGHTS_CACHE.pop(old_k, None)
+    now_loc = fids.now_local()
+    minute_bucket = (now_loc.minute // 5) * 5
+    bucket_time = now_loc.replace(minute=minute_bucket, second=0, microsecond=0)
+    fids_map = db.fids_lookup_map(fids.to_iso(bucket_time - timedelta(hours=3)),
+                                  fids.to_iso(bucket_time + timedelta(hours=6)))
+    all_flights = attach_logos(
+        build_flights(states, store, overflights, cov_km, show_unknown, bstats, fids_map=fids_map), store)
     tm["uçaklar"] = time.time() - t1
     mode = "live" if status == "ok" else ("loading" if status == "loading" else "err")
     runway = infer_runway(states, wind_dir)
