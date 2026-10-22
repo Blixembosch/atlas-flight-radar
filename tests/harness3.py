@@ -73,6 +73,8 @@ class FakeSt(types.ModuleType):
     def popover(self, *a, **k): return Ctx()
     def spinner(self, *a, **k): return Ctx()
     def code(self, t, **k): self.md.append("<code>" + str(t) + "</code>")
+    def pydeck_chart(self, *a, **k): pass
+
     # --- bileşenler
     def _w(self, key, label, default, options=None):
         k = key or label

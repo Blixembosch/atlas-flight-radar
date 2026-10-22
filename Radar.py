@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.4.5)
+Atlas'ın Uçak Gözlem Kulesi  (v0.4.6)
   * Radar        : harita + detay paneli + gökyüzü pusulası + sesli bahçe uyarısı + FIDS füzyonu
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar + Uçak Avcısı rozetleri (SQLite, GitHub `data` dalında yedeklenir)
@@ -44,6 +44,12 @@ try:
   from streamlit_autorefresh import st_autorefresh
 except ImportError:
   st_autorefresh = None
+
+try:
+  import pydeck as pdk
+except ImportError:
+  pdk = None
+
 
 # =============================================================================
 # AYARLAR VE SABİTLER (radar_config.py modülünden içe aktarılır)
@@ -287,12 +293,13 @@ def _traffic_job(key, bearer, radius_km, store, cov_km, overflights):
   """Arka plan: trafik verisini ve tüm uçakların rota/uçak/logo kayıtlarını ısıtır, ardından önbelleğe yazar."""
   try:
     res = _fetch_states_live(bearer, radius_km)
+    _TCACHE[key] = (time.time(), res)
     if store is not None and res[1] == "ok":
       try:
         attach_logos(build_flights(res[0], store, overflights, cov_km, True), store)
       except Exception:
         pass
-    _TCACHE[key] = (time.time(), res)
+
   except Exception:
     pass
   finally:
@@ -1258,7 +1265,6 @@ def build_map(flights, sel_id, cov_km=NEAR_KM, view_km=35, view=None):
       ".leaflet-control-scale-line{background:rgba(255,255,255,.85)!important}</style>"))
   m.get_root().html.add_child(folium.Element(TIP_CSS))
   folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
-  folium.TileLayer("CartoDB dark_matter", name="Koyu harita", show=False).add_to(m)
 
   dlat = view_km / 111.2
   dlon = view_km / (111.2 * math.cos(math.radians(HOME_LAT)))
@@ -1301,10 +1307,67 @@ def build_map(flights, sel_id, cov_km=NEAR_KM, view_km=35, view=None):
       age = min(max(0.0, now - f["tpos"]), MOTION_MAX_AGE_S) if f.get("tpos") else 0.0
       entries.append("{m:%s,lat:%.5f,lon:%.5f,trk:%.1f,v:%.5f,age:%.1f}" % (
           mk.get_name(), f["lat"], f["lon"], f["track"], f["speed"] / 3600.0, age))
-  if entries:
+  if entries and len(flights) <= 20:
     Motion(",".join(entries)).add_to(m)
   folium.LayerControl(collapsed=True).add_to(m)
   return m
+
+
+def render_pydeck_radar(flights, sel_id, cov_km):
+  """Ultra-hızlı, sıfır kasma WebGL Radar Haritası (Pydeck)."""
+  if pdk is None:
+    return False
+
+  data = []
+  for f in flights:
+    is_sel = f["id"] == sel_id
+    if is_sel:
+      color = [250, 204, 21, 255]
+      radius = 1600
+    elif f["dir"] == "ARR":
+      color = [34, 197, 94, 230]
+      radius = 1000
+    elif f["dir"] == "DEP":
+      color = [249, 115, 22, 230]
+      radius = 1000
+    else:
+      color = [168, 85, 247, 230]
+      radius = 800
+
+    o_iata = f["origin"]["iata"] if f.get("origin") else "?"
+    d_iata = f["dest"]["iata"] if f.get("dest") else "?"
+    data.append({
+        "lat": f["lat"],
+        "lon": f["lon"],
+        "color": color,
+        "radius": radius,
+        "callsign": f["callsign"] or "Bilinmiyor",
+        "airline": f.get("airline") or "",
+        "alt_ft": f.get("alt_ft", 0),
+        "speed": f.get("speed", 0),
+        "route": f"{o_iata} → {d_iata}",
+    })
+
+  home_pt = [{"lat": HOME_LAT, "lon": HOME_LON, "color": [59, 130, 246, 255], "radius": 1500, "callsign": "🏠 Bizim Ev", "airline": "Blixembosch", "alt_ft": 0, "speed": 0, "route": "Ana Üs"}]
+  apt_pt = [{"lat": AIRPORT_LAT, "lon": AIRPORT_LON, "color": [148, 163, 184, 255], "radius": 1200, "callsign": "🛫 EIN Havalimanı", "airline": "Eindhoven", "alt_ft": 0, "speed": 0, "route": "EHEH"}]
+
+  layers = [
+      pdk.Layer("ScatterplotLayer", data=data, get_position="[lon, lat]", get_color="color", get_radius="radius", pickable=True),
+      pdk.Layer("ScatterplotLayer", data=home_pt, get_position="[lon, lat]", get_color="color", get_radius="radius", pickable=True),
+      pdk.Layer("ScatterplotLayer", data=apt_pt, get_position="[lon, lat]", get_color="color", get_radius="radius", pickable=True),
+  ]
+
+  zoom = 10 if cov_km <= 50 else (9 if cov_km <= 100 else 8)
+  view_state = pdk.ViewState(latitude=HOME_LAT, longitude=HOME_LON, zoom=zoom, pitch=0)
+  deck = pdk.Deck(
+      layers=layers,
+      initial_view_state=view_state,
+      tooltip={"html": "<b>{callsign}</b> ({airline})<br>🛫 {route}<br>⬆️ {alt_ft} ft · 💨 {speed} km/sa"},
+      map_style=None,
+  )
+  st.pydeck_chart(deck, use_container_width=True)
+  return True
+
 
 
 # =============================================================================
@@ -1314,9 +1377,11 @@ import re  # noqa: E402
 
 PAGES = ["🛫 Terminal", "🛰️ Radar", "📒 Gözlem Defteri"]
 DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Terminal tarifesi: hızlı ve kilitlenmesiz
-APP_VERSION = "v0.4.5"
+APP_VERSION = "v0.4.6"
 CHANGELOG = [
+    ("v0.4.6", "Hafif & akıcı görselleştirme (⚡ Hızlı Radar - WebGL / Pydeck desteği), CartoDB hata düzeltmesi, Leaflet Motion optimizasyonu ve sayfa gezinme kararlılığı"),
     ("v0.4.5", "Üstümüzden geçen transit uçuş kapsama mantığı düzeltildi (kapsama yarıçapına göre dinamik transit filtreleme), bahçe üstündeki uçaklar asla gizlenmiyor, yükleme durumu ve otomatik yenileme aralığı optimize edildi"),
+
     ("v0.4.4", "Modüler mimari (radar_config, radar_styles), birleşik modern görsel tasarım ve fonksiyonel test paketi"),
 
     ("v0.4.2", "Yüksek kontrast & tam okunabilirlik (WCAG AA), Streamlit uyarı kutusu renk düzeltmesi, API ağ isteklerinde tarayıcı User-Agent başlığı ile kesintisiz canlı radar verisi"),
@@ -1636,6 +1701,8 @@ def page_radar(db, store, demo, refresh_s_box):
                                     "uçaklar uzaktan görünür.")
     with f5:
       with st.popover("⚙️"):
+        fast_map = st.toggle("⚡ Hızlı Radar (Ultra hafif WebGL)", key="f_fast_map",
+                             help="Haritayı donmayan ve kasmayan WebGL motoruyla çizer.")
         sound_on = st.toggle("🔔 Bahçe sesli uyarısı", key="f_sound",
                              help="Bahçenin üstüne uçak girdiğinde kokpit 'ding-dong' anons sesi çalar.")
         show_unknown = st.toggle("Rotası bilinmeyenleri de göster", key="f_unk",
@@ -1649,7 +1716,8 @@ def page_radar(db, store, demo, refresh_s_box):
     with f2:
       query = st.text_input("Ara", key="f_q", placeholder="🔍 Ara: HV6710, Transavia, Athens, 737, PH-HXK...",
                             label_visibility="collapsed")
-  remember(["f_over", "f_cov", "f_unk", "f_sound", "f_view", "f_q"])
+  remember(["f_over", "f_cov", "f_unk", "f_sound", "f_view", "f_q", "f_fast_map"])
+
   cov_km, view_km = COVERAGE[cov_label]
   CFG["visible_km"], CFG["visible_alt"] = VISIBLE_KM, VISIBLE_ALT_FT
   CFG["overflight_km"] = cov_km if overflights else OVERFLIGHT_KM
@@ -1771,18 +1839,23 @@ def page_radar(db, store, demo, refresh_s_box):
     col_map, col_panel = st.columns([2.2, 1])
     with col_map:
       t1 = time.time()
-      m = build_map(flights, ss["sel"], cov_km, view_km)
+      used_fast = False
+      if ss.get("f_fast_map") and pdk is not None:
+        used_fast = render_pydeck_radar(flights, ss["sel"], cov_km)
+      if not used_fast:
+        m = build_map(flights, ss["sel"], cov_km, view_km)
+        out = st_folium(m, height=MAP_HEIGHT, use_container_width=True,
+                        returned_objects=["last_object_clicked_tooltip"],
+                        key=f"radar_map_{ss['_map_gen']}")
+        clicked = ((out or {}).get("last_object_clicked_tooltip") or "").strip()
+        hit_f = next((f for f in flights if f["label"] == clicked), None) if clicked else None
+        if hit_f:
+          ss["sel"] = hit_f["id"]
+          ss["_map_gen"] += 1  # eski tıklamayı unut, haritayı seçili renkle yeniden çiz
+          st.rerun()
       tm["harita"] = time.time() - t1
-      out = st_folium(m, height=MAP_HEIGHT, use_container_width=True,
-                      returned_objects=["last_object_clicked_tooltip"],
-                      key=f"radar_map_{ss['_map_gen']}")
-      clicked = ((out or {}).get("last_object_clicked_tooltip") or "").strip()
-      hit_f = next((f for f in flights if f["label"] == clicked), None) if clicked else None
-      if hit_f:
-        ss["sel"] = hit_f["id"]
-        ss["_map_gen"] += 1  # eski tıklamayı unut, haritayı seçili renkle yeniden çiz
-        st.rerun()
       st.markdown(legend_html(overflights), unsafe_allow_html=True)
+
     with col_panel:
       selected = next((f for f in flights if f["id"] == ss["sel"]), None)
       if selected and not selected["photo"] and not demo:  # fotoğraf yoksa yedek kaynak
@@ -2041,8 +2114,7 @@ def main():
   store = get_store()
 
   # 2) Gezinme
-  keep({"page": DEFAULT_PAGE, "demo": False})
-  if st.session_state.get("page") not in PAGES:
+  if "page" not in st.session_state or st.session_state["page"] not in PAGES:
     st.session_state["page"] = DEFAULT_PAGE
   cur_page = st.session_state["page"]
   page_idx = PAGES.index(cur_page)
@@ -2057,7 +2129,8 @@ def main():
       if st.button("Çıkış", use_container_width=True, key="logout_btn"):
         radar_auth.logout(st)
         st.rerun()
-  remember(["page", "demo"])
+  remember(["demo"])
+
 
   # 3) Sayfa
   st.session_state["_switched"] = st.session_state.get("_last_page") != page
