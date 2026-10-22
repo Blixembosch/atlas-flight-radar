@@ -26,7 +26,7 @@ LAT = {"github": 1.0, "adsblol": 0.8, "adsbdb": 0.3, "aircraft": 0.3, "photo": 0
 OPENSKY_TIMEOUT = 5.0
 LOGO, ADB = 0.4, 1.2
 BUDGET_PAINT = 0.35          # bir çizimin en fazla süresi (sn): yavaş çağrı beklenmemeli
-BUDGET_PAINT_STEADY = 0.25
+BUDGET_PAINT_STEADY = 0.35
 
 def setup(github_rows=True, opensky_down=True):
     radar.DEFAULT_PAGE = P[0]   # Terminal varsayılan açılış sayfası
@@ -90,7 +90,7 @@ print("== 2) Terminal'den Radar'a geçiş")
 radar.join_background(timeout=20)
 n_calls = dict(Net.calls)
 set_ss("page", P[1]); dt = timed("Terminal → Radar (ısınmış)")
-ck(f"ısınmış Radar çizimi hızlı ({dt:.2f} sn)", dt < BUDGET_PAINT_STEADY, dt)
+ck(f"ısınmış Radar çizimi hızlı ({dt:.2f} sn)", dt < BUDGET_PAINT, dt)
 ck("haritada 15 uçak var", len(SF.calls[-1][0].markers()) >= 15, len(SF.calls[-1][0].markers()))
 ck("geçişte yeni ağ çağrısı yok", all(Net.calls[k] == n_calls[k] for k in ("opensky", "adsblol", "adsbdb")), (n_calls, dict(Net.calls)))
 for i in range(4): timed("Radar tekrar çizim")

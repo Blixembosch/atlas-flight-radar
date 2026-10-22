@@ -286,17 +286,20 @@ def _from_adsblol(radius_km):
 
 
 _TCACHE = {}          # (bearer, yarıçap) -> (zaman, sonuç)   (tüm oturumlar için ortak)
+_FLIGHTS_CACHE = {}   # (fetched, overflights, cov_km, show_unknown) -> (all_flights, bstats)
+_LAST_SIGHTINGS = {"sig": None, "t": 0.0}
+_LAST_WARM_TERM = 0.0
 STALE_OK_S = 120      # sayfa geçişinde ve otomatik yenilemede bu kadar eski veri anında gösterilir, arka planda tazelenir
 
 
 def _traffic_job(key, bearer, radius_km, store, cov_km, overflights):
-  """Arka plan: trafik verisini ve tüm uçakların rota/uçak/logo kayıtlarını ısıtır, ardından önbelleğe yazar."""
+  """Arka plan: trafik verisini ve tüm uçakların rota/uçak kayıtlarını ısıtır, ardından önbelleğe yazar."""
   try:
     res = _fetch_states_live(bearer, radius_km)
     _TCACHE[key] = (time.time(), res)
     if store is not None and res[1] == "ok":
       try:
-        attach_logos(build_flights(res[0], store, overflights, cov_km, True), store)
+        build_flights(res[0], store, overflights, cov_km, True)
       except Exception:
         pass
 
@@ -675,11 +678,32 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
   cands = _candidates(states, overflights, coverage_km)
   callsigns = sorted({(c[0][1] or "").strip() for c in cands} - {""})
   hexes = sorted({c[0][0] for c in cands})
-  with ThreadPoolExecutor(ENRICH_WORKERS) as pool:   # rota ve uçak sorguları aynı anda
-    f_r = [pool.submit(lookup_route, c, store) for c in callsigns]
-    f_a = [pool.submit(lookup_aircraft, h, store) for h in hexes]
-    routes = dict(zip(callsigns, (f.result() for f in f_r)))
-    acs = dict(zip(hexes, (f.result() for f in f_a)))
+
+  now_ts = time.time()
+  routes = {}
+  missing_callsigns = []
+  for c in callsigns:
+    hit = store.get(("route", c)) if store is not None else None
+    if hit and hit[0] > now_ts:
+      routes[c] = hit[1]
+    else:
+      missing_callsigns.append(c)
+
+  acs = {}
+  missing_hexes = []
+  for h in hexes:
+    hit = store.get(("ac", h)) if store is not None else None
+    if hit and hit[0] > now_ts:
+      acs[h] = hit[1]
+    else:
+      missing_hexes.append(h)
+
+  if missing_callsigns or missing_hexes:
+    with ThreadPoolExecutor(ENRICH_WORKERS) as pool:   # eksik rota ve uçak sorguları aynı anda
+      f_r = [pool.submit(lookup_route, c, store) for c in missing_callsigns]
+      f_a = [pool.submit(lookup_aircraft, h, store) for h in missing_hexes]
+      routes.update(zip(missing_callsigns, (f.result() for f in f_r)))
+      acs.update(zip(missing_hexes, (f.result() for f in f_a)))
 
   ein_ap = {"iata": "EIN", "icao": AIRPORT_ICAO, "city": "Eindhoven", "flag": "🇳🇱",
             "lat": AIRPORT_LAT, "lon": AIRPORT_LON}
@@ -1377,8 +1401,9 @@ import re  # noqa: E402
 
 PAGES = ["🛫 Terminal", "🛰️ Radar", "📒 Gözlem Defteri"]
 DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Terminal tarifesi: hızlı ve kilitlenmesiz
-APP_VERSION = "v0.4.6"
+APP_VERSION = "v0.4.7"
 CHANGELOG = [
+    ("v0.4.7", "Performans ve bütçe optimizasyonu: uçuş verisi hafıza önbelleği, hafif paralel sorgulama, SQLite disk commit ve terminal ısıtma kısıtlaması"),
     ("v0.4.6", "Hafif & akıcı görselleştirme (⚡ Hızlı Radar - WebGL / Pydeck desteği), CartoDB hata düzeltmesi, Leaflet Motion optimizasyonu ve sayfa gezinme kararlılığı"),
     ("v0.4.5", "Üstümüzden geçen transit uçuş kapsama mantığı düzeltildi (kapsama yarıçapına göre dinamik transit filtreleme), bahçe üstündeki uçaklar asla gizlenmiyor, yükleme durumu ve otomatik yenileme aralığı optimize edildi"),
 
@@ -1745,11 +1770,25 @@ def page_radar(db, store, demo, refresh_s_box):
     tm["veri"] = time.time() - t1
     raw_n = len(states)
     t1 = time.time()
-    now_loc = fids.now_local()
-    fids_map = db.fids_lookup_map(fids.to_iso(now_loc - timedelta(hours=3)),
-                                  fids.to_iso(now_loc + timedelta(hours=6)))
-    all_flights = attach_logos(
-        build_flights(states, store, overflights, cov_km, show_unknown, bstats, fids_map=fids_map), store)
+    if not _TCACHE:
+      _FLIGHTS_CACHE.clear()
+    states_sig = tuple(s[0] for s in states) if states else ()
+    cache_k = (fetched, overflights, cov_km, show_unknown, states_sig)
+    hit_fl = _FLIGHTS_CACHE.get(cache_k)
+    if hit_fl is not None:
+      all_flights, bstats = hit_fl
+    else:
+      now_loc = fids.now_local()
+      minute_bucket = (now_loc.minute // 5) * 5
+      bucket_time = now_loc.replace(minute=minute_bucket, second=0, microsecond=0)
+      fids_map = db.fids_lookup_map(fids.to_iso(bucket_time - timedelta(hours=3)),
+                                    fids.to_iso(bucket_time + timedelta(hours=6)))
+      all_flights = attach_logos(
+          build_flights(states, store, overflights, cov_km, show_unknown, bstats, fids_map=fids_map), store)
+      _FLIGHTS_CACHE[cache_k] = (all_flights, dict(bstats))
+      if len(_FLIGHTS_CACHE) > 8:
+        for old_k in list(_FLIGHTS_CACHE)[:-4]:
+          _FLIGHTS_CACHE.pop(old_k, None)
     tm["uçaklar"] = time.time() - t1
     mode = "live" if status == "ok" else ("loading" if status == "loading" else "err")
     runway = infer_runway(states, wind_dir)
@@ -1764,7 +1803,12 @@ def page_radar(db, store, demo, refresh_s_box):
           if f["visible"] and (f.get("route_known") or f.get("reg") or f.get("type_code"))
       ]
       if items:
-        db.record_sightings(items, datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S"))
+        now_ts = time.time()
+        sig = tuple(sorted((it["icao24"], it["callsign"], it.get("dist_km"), it.get("alt_ft")) for it in items))
+        if sig != _LAST_SIGHTINGS.get("sig") or (now_ts - _LAST_SIGHTINGS.get("t", 0.0) >= 15.0):
+          db.record_sightings(items, datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S"))
+          _LAST_SIGHTINGS["sig"] = sig
+          _LAST_SIGHTINGS["t"] = now_ts
     except Exception:  # defter hatası radarı asla durdurmasın
       pass
 
@@ -1905,7 +1949,8 @@ def page_radar(db, store, demo, refresh_s_box):
         f" · ⏱ {' · '.join(f'{k} {v:.1f}' for k, v in tm.items())} · toplam {time.time() - t_page:.1f} sn</div>",
         unsafe_allow_html=True,
     )
-  if any(k and k[0] == "logo" for k in list(_BG["logo"])):   # logolar iniyor: kısa süre sonra yenile
+  cur_logos = {("logo", f["airline_key"], f["airline_iata"]) for f in flights if f.get("airline_key") or f.get("airline_iata")}
+  if any(k in _BG["logo"] for k in cur_logos):   # ekrandaki uçakların logosu iniyor: kısa süre sonra yenile
     refresh_s_box[-1] = min(refresh_s_box[-1], 5)
 
 
@@ -1916,6 +1961,11 @@ def _more_rows():
 
 def warm_terminal(db):
   """Radar açıkken Terminal tarifesini arka planda ısıtır; Terminal sekmesine geçildiğinde hiç beklemez."""
+  global _LAST_WARM_TERM
+  now_ts = time.time()
+  if now_ts - _LAST_WARM_TERM < 30.0:
+    return
+  _LAST_WARM_TERM = now_ts
   if not db.sync_done.is_set():
     return
   key = str(secret("AERODATABOX_KEY", "")).strip()

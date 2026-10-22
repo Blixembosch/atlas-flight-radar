@@ -321,6 +321,7 @@ class RadarDB:
   def connect(self):
     con = sqlite3.connect(str(self.path), timeout=15, check_same_thread=False)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA synchronous = NORMAL")
     return con
 
   @contextmanager
