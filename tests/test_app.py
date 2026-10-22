@@ -1,4 +1,5 @@
 import sys, os, re, time
+from datetime import datetime
 sys.path.insert(0, os.path.dirname(__file__))
 import harness3 as H
 from harness3 import fake, radar, Net, SF, run, press, login, row, ap, adb_payload
@@ -83,7 +84,8 @@ ck("hata düzelince rota görünür", "Rota aranıyor" not in md() and "AGP" in 
 
 # ================= 3) Gözlem kaydı
 db = radar.get_db()
-st_ = db.sighting_stats(time.strftime("%Y-%m-%d"), "2000-01-01")
+today_str = datetime.now(radar.TZ).strftime("%Y-%m-%d")
+st_ = db.sighting_stats(today_str, "2000-01-01")
 ck("bahçeden görünen + rotası bilinen uçak deftere yazıldı", st_["today"] >= 1, st_)
 rs = db.recent_sightings()
 ck("rotasız uçak deftere yazılmadı", all(r["callsign"] != "ZZZ999" for r in rs))
@@ -127,7 +129,8 @@ ck("terminal yenileme 60 sn", fake.refresh == 60000)
 # veritabanında
 rows_dep = db.fids_between("DEP", "2000", "2100")
 ck("tarife veritabanına yazıldı", len(rows_dep) >= 30)
-ck("kota sayacı yazıldı", db.usage(time.strftime("%Y-%m"), "aerodatabox")[0] == 1)
+month_str = datetime.now(radar.TZ).strftime("%Y-%m")
+ck("kota sayacı yazıldı", db.usage(month_str, "aerodatabox")[0] == 1)
 
 # arama
 set_ss("fids_q", "malaga"); run()

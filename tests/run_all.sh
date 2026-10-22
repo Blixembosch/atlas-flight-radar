@@ -4,8 +4,7 @@ set -eo pipefail
 cd "$(dirname "$0")/.."
 for t in test_db_auth test_fids test_app test_radar_flow test_traffic test_async test_switch; do
   echo "== $t"
-  out="$(python3 "tests/$t.py")"
-  echo "$out" | grep -E "FAIL|❌|BAŞARISIZ|SONUÇ" || true
+  python3 "tests/$t.py"
 done
 echo "TÜM BİRİM VE AKIŞ TESTLERİ GEÇTİ"
 python3 tests/test_terminal_diag.py
