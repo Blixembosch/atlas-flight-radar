@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.4.0)
+Atlas'ın Uçak Gözlem Kulesi  (v0.4.3)
   * Radar        : harita + detay paneli + gökyüzü pusulası + sesli bahçe uyarısı + FIDS füzyonu
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar + Uçak Avcısı rozetleri (SQLite, GitHub `data` dalında yedeklenir)
@@ -188,11 +188,12 @@ SPECIAL_PREFIXES = {
     "BAF": ("Belçika Hava Kuvvetleri 🪖", "#3f6212", "#ecfccb", "MIL"),
     "RCH": ("ABD Hava Kuvvetleri (USAF) 🪖", "#3f6212", "#ecfccb", "MIL"),
     "RRR": ("İngiliz Kraliyet Hava Kuvvetleri 🪖", "#3f6212", "#ecfccb", "MIL"),
+    "GRZ": ("Hollanda Chinook Filosu (298 Sqn) 🚁", "#3f6212", "#ecfccb", "MIL"),
     "LIF": ("Lifeliner Hava Ambulansı 🚁", "#b91c1c", "#fef2f2", "MED"),
     "ANW": ("ANWB Hava Ambulansı 🚁", "#b91c1c", "#fef2f2", "MED"),
     "ZXP": ("Hollanda Polis Helikopteri 🚁", "#1d4ed8", "#eff6ff", "POL"),
 }
-SPECIAL_TYPES = {"C130", "C30J", "A400", "C17", "F35", "CH47", "AH64", "NH90", "EC35", "H135", "EC45", "H145", "AW139"}
+SPECIAL_TYPES = {"C130", "C30J", "A400", "C17", "F35", "CH47", "H47", "AH64", "NH90", "EC35", "H135", "EC45", "H145", "AW139"}
 
 # ICAO tür kodu -> (ad, tipik koltuk sayısı, çocuklara göre kısa bilgi)
 AIRCRAFT_TYPES = {
@@ -240,6 +241,7 @@ AIRCRAFT_TYPES = {
     "C17": ("Boeing C-17 Globemaster III 🪖", 102, "İçine koca bir tank veya helikopter sığabilen 4 motorlu dev askeri jet!"),
     "F35": ("Lockheed Martin F-35 Lightning II 🪖", 1, "Ses hızını aşabilen, radarda görünmeyen süper hızlı savaş uçağı!"),
     "CH47": ("Boeing CH-47 Chinook 🚁", 44, "Önde ve arkada iki dev pervanesi olan, kamyon bile taşıyabilen güçlü helikopter!"),
+    "H47": ("Boeing CH-47 Chinook 🚁", 44, "Önde ve arkada iki dev pervanesi olan, kamyon bile taşıyabilen güçlü helikopter!"),
     "AH64": ("Boeing AH-64 Apache 🚁", 2, "Kraliyet Hava Kuvvetleri'nin ileri teknoloji keşif ve koruma helikopteri."),
     "NH90": ("NHIndustries NH90 🚁", 20, "Gemilere dahi inebilen modern askeri arama-kurtarma helikopteri."),
     "EC35": ("Airbus H135 Helikopter 🚁", 5, "Çoğunlukla sarı renkli 'Lifeliner' hava ambulansı veya polis helikopteri olarak uçar!"),
@@ -1195,7 +1197,7 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
       direction = "ARR"
     elif from_ein:
       direction = "DEP"
-    elif has_route or kind == "transit":  # rotası bilinen ve EIN ile ilgisi olmayan
+    elif kind == "transit" or (has_route and kind != "near"):  # rotası bilinen ve EIN ile ilgisi olmayan uzaktaki uçuş
       direction = "TRN"
     else:
       direction = "ARR" if vrate < 0 else "DEP"
@@ -2255,7 +2257,7 @@ def page_radar(db, store, demo, refresh_s_box):
     else:
       hid = counts["hidden"]
       extra = (f" Rotası bilinmediği için {hid} uçak gizlendi (⚙️ menüsünden gösterebilirsin)." if hid else "")
-      st.info("Şu an listelenecek uçak yok." + extra + " Arayüzü denemek için üstteki “Demo modu”nu aç.")
+      st.info("Şu an koridorda alçak uçuş görünmüyor." + extra + " Üstümüzden geçen transit uçakları görmek için 'Üstümüzden geçenler' filtresini kontrol edebilir veya üstteki 'Demo modu'nu açabilirsin.")
 
     st.markdown(
         f"<div class='foot'>Uçak konumu: {esc(_SRC['last_source'] or 'OpenSky Network / adsb.lol')} · adsbdb · Open-Meteo · "
