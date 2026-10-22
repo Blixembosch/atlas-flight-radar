@@ -274,7 +274,7 @@ def _from_adsblol(radius_km):
   nm = min(250, max(1, math.ceil((radius_km + 10) / 1.852)))
   url = ADSBLOL_URL.format(lat=AIRPORT_LAT, lon=AIRPORT_LON, nm=nm)
   try:
-    r = _http_get(url, timeout=8)
+    r = _http_get(url, timeout=3.5)
   except requests.RequestException as e:
     return None, f"adsb.lol {_err_word(e)}"
   if r.status_code != 200:
@@ -391,7 +391,7 @@ def cached(store, key, ttl_ok, ttl_fail, fn):
   return val
 
 
-def _get_json(url, timeout=2.5):
+def _get_json(url, timeout=1.8):
   try:
     r = _http_get(url, timeout=timeout)
     if r.status_code == 200:
@@ -401,7 +401,7 @@ def _get_json(url, timeout=2.5):
   return None
 
 
-def _get_json_ex(url, timeout=2.5):
+def _get_json_ex(url, timeout=1.8):
   """('ok'|'none'|'err', json). 404 = kayıt gerçekten yok ('none'); ağ/sunucu hatası = 'err'."""
   try:
     r = _http_get(url, timeout=timeout)
@@ -1400,8 +1400,9 @@ import re  # noqa: E402
 
 PAGES = ["🛫 Terminal", "🛰️ Radar", "📒 Gözlem Defteri"]
 DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Terminal tarifesi: hızlı ve kilitlenmesiz
-APP_VERSION = "v0.4.7"
+APP_VERSION = "v0.4.8"
 CHANGELOG = [
+    ("v0.4.8", "Anında ve takılmasız sayfa geçişi, garantili tıklama alanı navigasyonu, optimize edilmiş API zaman aşımları ve modern avionik durum çubuğu"),
     ("v0.4.7", "Performans ve bütçe optimizasyonu: uçuş verisi hafıza önbelleği, hafif paralel sorgulama, SQLite disk commit ve terminal ısıtma kısıtlaması"),
     ("v0.4.6", "Hafif & akıcı görselleştirme (⚡ Hızlı Radar - WebGL / Pydeck desteği), CartoDB hata düzeltmesi, Leaflet Motion optimizasyonu ve sayfa gezinme kararlılığı"),
     ("v0.4.5", "Üstümüzden geçen transit uçuş kapsama mantığı düzeltildi (kapsama yarıçapına göre dinamik transit filtreleme), bahçe üstündeki uçaklar asla gizlenmiyor, yükleme durumu ve otomatik yenileme aralığı optimize edildi"),
@@ -1930,12 +1931,20 @@ def page_radar(db, store, demo, refresh_s_box):
           st.info("Şu an koridorda alçak uçuş görünmüyor." + extra + " Üstümüzden geçen transit uçakları görmek için 'Üstümüzden geçenler' filtresini açabilir veya üstteki 'Demo modu'nu açabilirsin.")
 
 
-    st.markdown(
-        f"<div class='foot'>Uçak konumu: {esc(_SRC['last_source'] or 'OpenSky Network / adsb.lol')} · adsbdb · Open-Meteo · "
-        "Harita: © OpenStreetMap katkıcıları, © CARTO · Rota/tür bilgisi bazı uçaklarda eksik olabilir."
-        f" · ⏱ {' · '.join(f'{k} {v:.1f}' for k, v in tm.items())} · toplam {time.time() - t_page:.1f} sn</div>",
-        unsafe_allow_html=True,
-    )
+    with st.container(key="status_footer"):
+      c_v, c_inf = st.columns([1, 7], vertical_alignment="center")
+      with c_v:
+        with st.popover(f"ℹ️ {APP_VERSION}"):
+          st.markdown("**Sürüm geçmişi**")
+          for v_, t_ in CHANGELOG:
+            st.markdown(f"- **{v_}** · {t_}")
+      with c_inf:
+        st.markdown(
+            f"<div class='status-info'>Uçak konumu: {esc(_SRC['last_source'] or 'OpenSky Network / adsb.lol')} · adsbdb · Open-Meteo · "
+            "Harita: © OpenStreetMap katkıcıları, © CARTO · Rota/tür bilgisi bazı uçaklarda eksik olabilir."
+            f" · ⏱ {' · '.join(f'{k} {v:.1f}' for k, v in tm.items())} · toplam {time.time() - t_page:.1f} sn</div>",
+            unsafe_allow_html=True,
+        )
   cur_logos = {("logo", f["airline_key"], f["airline_iata"]) for f in flights if f.get("airline_key") or f.get("airline_iata")}
   if any(k in _BG["logo"] for k in cur_logos):   # ekrandaki uçakların logosu iniyor: kısa süre sonra yenile
     refresh_s_box[-1] = min(refresh_s_box[-1], 5)
@@ -2078,22 +2087,33 @@ def page_terminal(db, store, demo, refresh_s_box):
   if res.get("error") and not demo:
     st.markdown(f"<div class='tnote warn'>⚠️ Tarife güncellenemedi: {esc(res['error'])} "
                 "· Son kayıtlı veri gösteriliyor.</div>", unsafe_allow_html=True)
-  if not demo and key:
-    with st.popover("🛠 Tanı"):
-      st.markdown(f"**Sürüm:** {APP_VERSION}")
-      if ss.get("fids_force_msg"):
-        st.markdown(f"**Son düğme basışı:** {ss['fids_force_msg']}")
-      st.markdown("**Son tarife çekme:**")
-      st.code(db.meta_get("fids_last_diag") or "henüz çekilmedi", language=None)
-      st.caption("Bu metin yalnızca yanıtın yapısını içerir (anahtar/şifre içermez).")
   if demo:
     foot = "Demo tarifesi örnek verilerdir; gerçek uçuşları göstermez."
   else:
     bs = fids.budget_state(db, now, monthly)
     foot = (f"Tarife: AeroDataBox · bu ay {bs['used']}/{bs['cap']} kota birimi kullanıldı · "
             f"yaklaşık {bs['interval_h']:.1f} saatte bir yenilenir")
-  st.markdown(f"<div class='foot'>{esc(foot)} · Saatler Hollanda saatidir. Gecikme = planlanan ile "
-              f"tahmini/gerçekleşen saat farkı. · sayfa {time.time() - t0:.1f} sn</div>", unsafe_allow_html=True)
+
+  with st.container(key="status_footer"):
+    has_diag = not demo and key
+    cols = st.columns([1, 1, 6] if has_diag else [1, 7], vertical_alignment="center")
+    with cols[0]:
+      with st.popover(f"ℹ️ {APP_VERSION}"):
+        st.markdown("**Sürüm geçmişi**")
+        for v_, t_ in CHANGELOG:
+          st.markdown(f"- **{v_}** · {t_}")
+    if has_diag:
+      with cols[1]:
+        with st.popover("🛠 Tanı"):
+          st.markdown(f"**Sürüm:** {APP_VERSION}")
+          if ss.get("fids_force_msg"):
+            st.markdown(f"**Son düğme basışı:** {ss['fids_force_msg']}")
+          st.markdown("**Son tarife çekme:**")
+          st.code(db.meta_get("fids_last_diag") or "henüz çekilmedi", language=None)
+          st.caption("Bu metin yalnızca yanıtın yapısını içerir (anahtar/şifre içermez).")
+    with cols[-1]:
+      st.markdown(f"<div class='status-info'>{esc(foot)} · Saatler Hollanda saatidir. Gecikme = planlanan ile "
+                  f"tahmini/gerçekleşen saat farkı. · sayfa {time.time() - t0:.1f} sn</div>", unsafe_allow_html=True)
 
 
 def _backup_now():
@@ -2132,6 +2152,19 @@ def page_diary(db, store, demo, refresh_s_box):
       if ss.pop("_backup_req", False):
         db.maybe_push(force=True, wait=True)
         st.rerun()
+
+  with st.container(key="status_footer"):
+    c_v, c_inf = st.columns([1, 7], vertical_alignment="center")
+    with c_v:
+      with st.popover(f"ℹ️ {APP_VERSION}"):
+        st.markdown("**Sürüm geçmişi**")
+        for v_, t_ in CHANGELOG:
+          st.markdown(f"- **{v_}** · {t_}")
+    with c_inf:
+      st.markdown(
+          "<div class='status-info'>📒 <b>Atlas Avcı Kulübü</b> · Gözlem Defteri · Bahçeden görülen uçaklar otomatik kaydedilir</div>",
+          unsafe_allow_html=True,
+      )
 
 
 def main():
@@ -2180,11 +2213,6 @@ def main():
     warm_terminal(db)
   fn = {"🛫 Terminal": page_terminal, "🛰️ Radar": page_radar, "📒 Gözlem Defteri": page_diary}[page]
   fn(db, store, demo, box)
-
-  with st.popover(f"ℹ️ {APP_VERSION}"):
-    st.markdown("**Sürüm geçmişi**")
-    for v_, t_ in CHANGELOG:
-      st.markdown(f"- **{v_}** · {t_}")
 
   # 4) Otomatik yenileme (sayfaya göre; en sonda ki sayfa hatası yenilemeyi engellemesin diye değil,
   #    sayfanın kendi aralığı belli olduktan sonra kurulur)

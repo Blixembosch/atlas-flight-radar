@@ -137,14 +137,33 @@ div.stButton>button:hover{border-color:#38bdf8;color:#fff;background:#243266;}
 .st-key-nav [data-testid="stElementContainer"]{margin:0;}
 .st-key-nav [data-testid="stRadio"] [role="radiogroup"]{gap:8px;flex-wrap:wrap;}
 .st-key-nav [data-testid="stRadio"] label{background:#0e1630;border:1px solid var(--line);border-radius:12px;
-  padding:7px 18px;margin:0;cursor:pointer;transition:all .12s ease;position:relative;}
-.st-key-nav [data-testid="stRadio"] label>div:first-child{position:absolute;opacity:0;width:0;height:0;pointer-events:none;}
-.st-key-nav [data-testid="stRadio"] label p{font-weight:800;font-size:.95rem;color:#f8fafc;white-space:nowrap;margin:0;}
-.st-key-nav [data-testid="stRadio"] label:hover{border-color:#38bdf8;}
+  padding:8px 20px;margin:0;cursor:pointer;transition:all .15s ease;position:relative;overflow:hidden;}
+.st-key-nav [data-testid="stRadio"] label>div:first-child{position:absolute;inset:0;width:100%;height:100%;opacity:0.0001;cursor:pointer;z-index:2;}
+.st-key-nav [data-testid="stRadio"] label p{font-weight:800;font-size:.95rem;color:#f8fafc;white-space:nowrap;margin:0;position:relative;z-index:1;pointer-events:none;}
+.st-key-nav [data-testid="stRadio"] label:hover{border-color:#38bdf8;box-shadow:0 0 12px rgba(56,189,248,.25);}
 .st-key-nav [data-testid="stRadio"] label:has(input:checked){background:linear-gradient(120deg,#2b3a9a,#6a35b8);
-  border-color:rgba(255,255,255,.35);box-shadow:0 0 14px rgba(56,189,248,0.35);}
+  border-color:rgba(255,255,255,.35);box-shadow:0 0 16px rgba(56,189,248,.4);}
 .st-key-nav [data-testid="stRadio"] label:has(input:checked) p{color:#fff;}
 .st-key-nav [data-testid="stToggle"] p{white-space:nowrap;font-weight:700;font-size:.9rem;color:#f8fafc;}
+
+/* Avionik Alt Durum Çubuğu */
+.st-key-status_footer{background:rgba(14,22,48,.75);border:1px solid var(--line);border-radius:14px;
+  padding:6px 14px;margin-top:16px;backdrop-filter:blur(8px);}
+.st-key-status_footer [data-testid="stHorizontalBlock"]{align-items:center;gap:12px;}
+.st-key-status_footer [data-testid="stElementContainer"]{margin:0;}
+.st-key-status_footer [data-testid="stPopover"]>button{
+  background:#141f42!important;border:1px solid rgba(56,189,248,.35)!important;
+  border-radius:20px!important;padding:4px 14px!important;font-size:.82rem!important;
+  font-weight:700!important;color:#cbd5e1!important;min-height:unset!important;
+  height:auto!important;box-shadow:0 2px 8px rgba(0,0,0,.25)!important;
+  transition:all .15s ease!important;line-height:1.4!important;
+}
+.st-key-status_footer [data-testid="stPopover"]>button:hover{
+  background:rgba(56,189,248,.2)!important;border-color:#38bdf8!important;
+  color:#fff!important;box-shadow:0 0 12px rgba(56,189,248,.4)!important;
+}
+.status-info{font-size:.82rem;font-weight:600;color:#94a3b8;line-height:1.4;}
+.status-info b{color:#cbd5e1;font-weight:700;}
 
 /* Giriş ekranı */
 .login-card{text-align:center;background:linear-gradient(160deg,#16204a,#1b1740);border:1px solid var(--line);
