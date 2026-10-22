@@ -15,8 +15,10 @@ _run = H.run
 def run_all():
     n = _run(); ALL_MD.extend(fake.md); return n
 H.run = run_all; run = run_all
+P = radar.PAGES
+PAGE_TERM, PAGE_DIARY, PAGE_RADAR = "🛫 Terminal", "📒 Gözlem Defteri", "🛰️ Radar"
 def login(pw="gizli"):
-    fake.session_state._force("Şifre", pw); fake.session_state._force("page", P[1]); fake.pressed = {"Giriş yap"}; return run_all()
+    fake.session_state._force("Şifre", pw); fake.session_state._force("page", PAGE_RADAR); fake.pressed = {"Giriş yap"}; return run_all()
 def press(key):
     cb, args = fake.buttons[key]
     if cb: cb(*args)
@@ -57,7 +59,7 @@ ck("yanlış şifre ekranda gösterilmez", "yanlis" not in md())
 
 # ================= 2) Giriş + radar
 login("gizli")
-set_ss("page", P[1]); run()
+set_ss("page", PAGE_RADAR); run()
 ck("doğru şifre: uygulama açıldı", fake.session_state.get("auth_ok") and "<div class='topbar'>" in md())
 ck("OpenSky çağrıldı", Net.calls["opensky"] >= 1)
 ck("GitHub'dan çekme denendi (veri dalı yok)", Net.calls["github"] >= 1)
@@ -93,14 +95,14 @@ ck("rotasız uçak deftere yazılmadı", all(r["callsign"] != "ZZZ999" for r in 
 # ================= 4) Sayfalar arası durum korunur
 fake.secrets.pop("AERODATABOX_KEY")
 set_ss("f_over", True); run()
-set_ss("page", P[0]); set_ss("fids_view", "Tüm gün"); run()
+set_ss("page", PAGE_TERM); set_ss("fids_view", "Tüm gün"); run()
 ck("terminal sayfasında radar bileşen anahtarı silinir (Streamlit davranışı)", "f_over" not in fake.session_state)
-set_ss("page", P[1]); run()
+set_ss("page", PAGE_RADAR); run()
 ck("radara dönünce 'Üstümüzden geçenler' hâlâ açık", fake.session_state.get("f_over") is True)
 set_ss("f_over", False); run()
 
 # ================= 5) Terminal: anahtar yok
-set_ss("page", P[0]); set_ss("fids_view", "Tüm gün"); run()
+set_ss("page", PAGE_TERM); set_ss("fids_view", "Tüm gün"); run()
 ck("anahtar yokken boş durum açıklaması", "AERODATABOX_KEY" in md())
 ck("anahtar yokken AeroDataBox çağrısı yok", Net.calls["adb"] == 0)
 ck("iki panel de çizildi (Varış/Kalkış)", "tphead arr" in md() and "tphead dep" in md())
@@ -169,7 +171,7 @@ ck("demo etiketi", "Demo tarife" in md())
 set_ss("demo", False); run()
 
 # ================= 7) Defter
-set_ss("page", P[2]); run()
+set_ss("page", PAGE_DIARY); run()
 ck("defter KPI'ları", "kpis" in md() and "Bugün" in md())
 ck("defterde TRA6710", "TRA6710" in md())
 ck("defter yenileme 120 sn", fake.refresh == 120000)
@@ -187,7 +189,7 @@ H.new_session()
 run()
 ck("yeniden başlayınca yine şifre ister", "login-card" in md())
 login("gizli")
-set_ss("page", P[2]); run()
+set_ss("page", PAGE_DIARY); run()
 ck("veri data dalından geri geldi (TRA6710)", "TRA6710" in md())
 db = radar.get_db()
 ck("tarife de geri geldi", len(db.fids_between("DEP", "2000", "2100")) >= 30)
@@ -207,7 +209,7 @@ ck("boş şifre girmez", not fake.session_state.get("auth_ok"))
 H.reset_app(SECRETS); setup_world(); Net.gh = FakeGH(branch=True, data=b"SQLite format 3\x00" + b"x" * 100, repo_ok=False)
 run(); login("gizli")
 ck("GitHub hatasına rağmen radar açıldı", "<div class='topbar'>" in md())
-set_ss("page", P[2]); run()
+set_ss("page", PAGE_DIARY); run()
 ck("hata defterde okunur", "404" in md() or "yetki" in md() or "GitHub" in md())
 press("backup_btn")
 ck("çekme başarısızken uzağa yazılmadı", not any(m == "PUT" for m, _ in Net.gh.calls))

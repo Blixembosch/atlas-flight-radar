@@ -65,7 +65,7 @@ Net.os_exc = Timeout("read timed out")
 Net.adsb = {"ac": [{"hex": "a1", "flight": "TRA6710 ", "lat": 51.505, "lon": 5.52, "alt_baro": 2400, "gs": 148, "track": 215, "baro_rate": -700, "seen_pos": 0.5}]}
 Net.routes = {"TRA6710": {"airline": {"name": "Transavia", "icao": "TRA", "iata": "HV"},
               "origin": ap("ATH", "LGAV", "Athens", "GR", 37.9, 23.9), "destination": ap("EIN", "EHEH", "Eindhoven", "NL", 51.45, 5.37)}}
-fake.session_state._force("page", radar.PAGES[1])
+fake.session_state._force("page", "🛰️ Radar")
 H.run(); fake.session_state._force("Şifre", "p"); fake.pressed = {"Giriş yap"}; H.run()
 md = "\n".join(fake.md)
 ck("uygulama: OpenSky çökükken uçak haritada", len(SF.calls[-1][0].markers()) == 1 and "TRA6710" in md)
@@ -75,7 +75,7 @@ n = Net.calls["opensky"]; H.run(); H.run()
 ck("uygulama: yenilemelerde OpenSky'ye tekrar vurulmuyor", Net.calls["opensky"] == n)
 # ikisi de çökerse uygulama düşmez, uyarı gösterir
 Net.adsb = None; radar._SRC["os_down_until"] = 0.0
-fake.session_state._force("page", radar.PAGES[1]); H.run()
+fake.session_state._force("page", "🛰️ Radar"); H.run()
 ck("uygulama: ikisi de çökünce çökmez + uyarı", "⚠️" in "\n".join(fake.md))
 
 print("\nBAŞARISIZ:", FAILS if FAILS else "yok")

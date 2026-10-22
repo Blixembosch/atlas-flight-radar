@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS sightings (
   UNIQUE (day, icao24, callsign)
 );
 CREATE INDEX IF NOT EXISTS idx_sightings_day ON sightings (day);
+CREATE INDEX IF NOT EXISTS idx_sightings_last_seen ON sightings (last_seen DESC, id DESC);
 
 -- Harici API kota sayacı (ay bazında)
 CREATE TABLE IF NOT EXISTS api_usage (
@@ -315,6 +316,8 @@ class RadarDB:
     self.last_push_ok = 0.0
     self._meta_cache = {}
     self._fids_map_cache = (-1, "", "", {})
+    self._stats_cache = None
+    self._recent_cache = None
     self.init_schema()
 
   # ---- bağlantı
@@ -476,9 +479,15 @@ class RadarDB:
       for it in items:
         vals = [it.get(c) if c != "callsign" else (it.get(c) or "") for c in SIGHT_COLS]
         con.execute(sql, vals + [now_iso, now_iso, it.get("dist_km"), it.get("alt_ft")])
+    self._stats_cache = None
+    self._recent_cache = None
     return len(items)
 
   def sighting_stats(self, today, week_from):
+    now_ts = time.time()
+    hit = self._stats_cache
+    if hit and (now_ts - hit[0] < 30.0) and hit[1] == today and hit[2] == week_from:
+      return hit[3]
     with self.tx(write=False) as con:
       one = lambda q, *a: con.execute(q, a).fetchone()[0]  # noqa: E731
       stats = {
@@ -501,12 +510,19 @@ class RadarDB:
       stats["top_type"] = (r["type_name"], r["c"]) if r else None
       stats["per_day"] = {r["day"]: r["c"] for r in con.execute(
           "SELECT day, COUNT(*) c FROM sightings WHERE day>=? GROUP BY day", (week_from,))}
+    self._stats_cache = (now_ts, today, week_from, stats)
     return stats
 
   def recent_sightings(self, limit=30):
+    now_ts = time.time()
+    hit = self._recent_cache
+    if hit and (now_ts - hit[0] < 15.0) and hit[1] == limit:
+      return hit[2]
     with self.tx(write=False) as con:
-      return [dict(r) for r in con.execute(
+      res = [dict(r) for r in con.execute(
           "SELECT * FROM sightings ORDER BY last_seen DESC, id DESC LIMIT ?", (limit,))]
+    self._recent_cache = (now_ts, limit, res)
+    return res
 
   # ---- GitHub senkronu
   def snapshot_bytes(self):

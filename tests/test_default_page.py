@@ -77,11 +77,21 @@ chk("Manuel Gözlem Defteri kayıt düğmesi (spot_manual_btn) görünür", "spo
 
 # Manuel kayıt düğmesine bas ve Gözlem Defteri sayfasında rozetleri kontrol et
 H.press("spot_manual_btn")
-fake.session_state._force("page", radar.PAGES[2])
+fake.session_state._force("page", "📒 Gözlem Defteri")
 H.run()
 diary_html = "\n".join(fake.md)
 chk("Gözlem Defteri sayfasında rütbe ve 8 rozet (.rank-box, .badge-grid) çizilir",
     "rank-box" in diary_html and "badge-grid" in diary_html and "İlk Av" in diary_html)
+
+chk("Sayfa sırası: Terminal -> Gözlem Defteri -> Radar",
+    radar.PAGES == ["🛫 Terminal", "📒 Gözlem Defteri", "🛰️ Radar"])
+
+import re
+rank_css = re.search(r"\.rank-box\{[^}]+\}", radar.CSS).group(0)
+rank_title_css = re.search(r"\.rank-title\{[^}]+\}", radar.CSS).group(0)
+bcard_css = re.search(r"\.bcard\.on\{[^}]+\}", radar.CSS).group(0)
+chk("Gözlem Defteri rütbe kutusunda ve rozetlerde sarı ton (#fde047, 250,204,21) yok",
+    "250,204,21" not in rank_css and "#fde047" not in rank_title_css and "250,204,21" not in bcard_css)
 
 print("\nBAŞARISIZ:", ", ".join(fails) if fails else "yok")
 sys.exit(1 if fails else 0)

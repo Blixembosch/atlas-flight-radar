@@ -1398,10 +1398,11 @@ def render_pydeck_radar(flights, sel_id, cov_km):
 # =============================================================================
 import re  # noqa: E402
 
-PAGES = ["🛫 Terminal", "🛰️ Radar", "📒 Gözlem Defteri"]
+PAGES = ["🛫 Terminal", "📒 Gözlem Defteri", "🛰️ Radar"]
 DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Terminal tarifesi: hızlı ve kilitlenmesiz
-APP_VERSION = "v0.4.8"
+APP_VERSION = "v0.4.9"
 CHANGELOG = [
+    ("v0.4.9", "Gözlem Defteri 2. sıraya alındı, sarı tonlar kaldırılarak Terminal ile tam uyumlu koyu havacılık temasına kavuşturuldu, veritabanı önbelleği ile ultra hızlı sekmeler arası geçiş ve performans testleri"),
     ("v0.4.8", "Anında ve takılmasız sayfa geçişi, garantili tıklama alanı navigasyonu, optimize edilmiş API zaman aşımları ve modern avionik durum çubuğu"),
     ("v0.4.7", "Performans ve bütçe optimizasyonu: uçuş verisi hafıza önbelleği, hafif paralel sorgulama, SQLite disk commit ve terminal ısıtma kısıtlaması"),
     ("v0.4.6", "Hafif & akıcı görselleştirme (⚡ Hızlı Radar - WebGL / Pydeck desteği), CartoDB hata düzeltmesi, Leaflet Motion optimizasyonu ve sayfa gezinme kararlılığı"),
@@ -1594,7 +1595,7 @@ def badges_html(stats):
       for ic, nm, ds, ok in badges
   )
   return (f"<div class='rank-box'>"
-          f"<div class='rank-head'><div class='rank-title'>🏅 Atlas'ın Rütbesi: {r_name}</div>"
+          f"<div class='rank-head'><div class='rank-title'>🏅 Atlas'ın Rütbesi: <span>{r_name}</span></div>"
           f"<div style='font-size:.8rem;color:#cbd5e1'>Açılan rozet: <b>{won} / {len(badges)}</b> · Sonraki hedef: <b>{tot}/{nxt_target}</b> uçak</div></div>"
           f"<div class='prog' style='margin:4px 0 8px'><div class='prog-fill' style='width:{pct}%'></div></div>"
           f"<div class='badge-grid'>{cards}</div></div>")
@@ -2211,7 +2212,7 @@ def main():
     warm_radar(store, get_bearer(), COVERAGE[_cov if _cov in COVERAGE else list(COVERAGE)[0]][0])
   elif page == "🛰️ Radar" and not demo and COLD_NONBLOCK:
     warm_terminal(db)
-  fn = {"🛫 Terminal": page_terminal, "🛰️ Radar": page_radar, "📒 Gözlem Defteri": page_diary}[page]
+  fn = {"🛫 Terminal": page_terminal, "📒 Gözlem Defteri": page_diary, "🛰️ Radar": page_radar}[page]
   fn(db, store, demo, box)
 
   # 4) Otomatik yenileme (sayfaya göre; en sonda ki sayfa hatası yenilemeyi engellemesin diye değil,

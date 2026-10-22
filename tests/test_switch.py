@@ -10,23 +10,24 @@ def set_ss(k, v): fake.session_state._force(k, v)
 def timed():
     t = time.time(); H.run(); return time.time() - t
 P = radar.PAGES
+PAGE_TERM, PAGE_DIARY, PAGE_RADAR = "🛫 Terminal", "📒 Gözlem Defteri", "🛰️ Radar"
 radar.FETCH_TTL = 8      # gerçek önbellek davranışı
 H.reset_app({"APP_PASSWORD": "p"}); Net.gh = None
 EIN = ap("EIN", "EHEH", "Eindhoven", "NL", 51.45, 5.37)
 Net.routes = {"TRA6710": {"airline": {"name": "Transavia", "icao": "TRA", "iata": "HV"}, "origin": ap("ATH", "LGAV", "Athens", "GR", 37.9, 23.9), "destination": EIN},
               "RYR1": {"airline": {"name": "Ryanair", "icao": "RYR", "iata": "FR"}, "origin": ap("AGP", "LEMG", "Malaga", "ES", 36.7, -4.5), "destination": EIN}}
 Net.states = [row("a1", "TRA6710", 51.505, 5.52, 2400, 275, 215, -4)]
-# radar'ı açmak için P[1] seçilir
-set_ss("page", P[1]); H.run(); set_ss("Şifre", "p"); fake.pressed = {"Giriş yap"}; H.run()
+# radar'ı açmak için PAGE_RADAR seçilir
+set_ss("page", PAGE_RADAR); H.run(); set_ss("Şifre", "p"); fake.pressed = {"Giriş yap"}; H.run()
 radar.join_background(); H.run()
 ck("radar açıldı, uçak var", len(SF.calls[-1][0].markers()) == 1)
 key = list(radar._TCACHE)[0]
 
 # 1) sayfa değişimi: bayat (30 sn) veri beklemeden gösterilir
-set_ss("page", P[0]); H.run()
+set_ss("page", PAGE_TERM); H.run()
 ts, res = radar._TCACHE[key]; radar._TCACHE[key] = (ts - 30, res)
 Net.os_delay = 1.5; n = Net.calls["opensky"]
-set_ss("page", P[1]); dt = timed()
+set_ss("page", PAGE_RADAR); dt = timed()
 ck("geçişte bayat veri anında (<0.7 sn), 1.5 sn'lik OpenSky beklenmedi", dt < 0.7 and len(SF.calls[-1][0].markers()) == 1, dt)
 radar.join_background()
 ck("arka planda tazelendi", Net.calls["opensky"] == n + 1 and time.time() - radar._TCACHE[key][0] < 5)
@@ -37,15 +38,15 @@ dt = timed()
 ck("normal yenilemede taze veri beklenir (konum bayat gösterilmez)", dt >= 1.4, dt)
 
 # 3) çok eski veri (>120 sn) geçişte de beklenir
-set_ss("page", P[0]); H.run()
+set_ss("page", PAGE_TERM); H.run()
 ts, res = radar._TCACHE[key]; radar._TCACHE[key] = (ts - 300, res)
-set_ss("page", P[1]); dt = timed()
+set_ss("page", PAGE_RADAR); dt = timed()
 ck("120 sn'den eski veri gösterilmez (beklenir)", dt >= 1.4, dt)
 
 # 4) hatalı sonuç bayat olarak servis edilmez
-Net.os_delay = 0; set_ss("page", P[0]); H.run()
+Net.os_delay = 0; set_ss("page", PAGE_TERM); H.run()
 radar._TCACHE[key] = (time.time() - 30, ([], "OpenSky zaman aşımı", time.time()))
-Net.os_delay = 1.0; set_ss("page", P[1]); dt = timed()
+Net.os_delay = 1.0; set_ss("page", PAGE_RADAR); dt = timed()
 ck("hata sonucu bayat servis edilmez", dt >= 0.9, dt)
 
 # 5) logo indirme radarı bekletmez
@@ -60,14 +61,14 @@ ck("logo inince 5 sn döngüsü biter", fake.refresh != 5000, fake.refresh)
 ck("altbilgide zamanlama", "⏱" in "\n".join(fake.md) and "toplam" in "\n".join(fake.md))
 
 # 6) sayfa gezinme (Terminal <-> Radar <-> Defter) doğrulaması
-set_ss("page", P[0]); H.run()
-ck("Terminal sayfasına başarıyla geçildi", fake.session_state["page"] == P[0] and any("Tarife" in m or "Uçuş" in m or "Görünüm" in m or "fids" in str(fake.rendered) for m in fake.md + list(fake.rendered)))
+set_ss("page", PAGE_TERM); H.run()
+ck("Terminal sayfasına başarıyla geçildi", fake.session_state["page"] == PAGE_TERM and any("Tarife" in m or "Uçuş" in m or "Görünüm" in m or "fids" in str(fake.rendered) for m in fake.md + list(fake.rendered)))
 
-set_ss("page", P[2]); H.run()
-ck("Gözlem defteri sayfasına başarıyla geçildi", fake.session_state["page"] == P[2] and any("Gözlem Defteri" in m or "rozet" in m.lower() for m in fake.md))
+set_ss("page", PAGE_DIARY); H.run()
+ck("Gözlem defteri sayfasına başarıyla geçildi", fake.session_state["page"] == PAGE_DIARY and any("Gözlem Defteri" in m or "rozet" in m.lower() for m in fake.md))
 
-set_ss("page", P[1]); H.run()
-ck("Radar sayfasına başarıyla geri dönüldü", fake.session_state["page"] == P[1] and len(SF.calls[-1][0].markers()) >= 1)
+set_ss("page", PAGE_RADAR); H.run()
+ck("Radar sayfasına başarıyla geri dönüldü", fake.session_state["page"] == PAGE_RADAR and len(SF.calls[-1][0].markers()) >= 1)
 
 print("\nBAŞARISIZ:", FAILS if FAILS else "yok")
 sys.exit(1 if FAILS else 0)

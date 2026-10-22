@@ -22,7 +22,7 @@ ck("Terminal açıkken trafik arka planda çekildi", Net.calls["opensky"] + Net.
 ck("rota önceden alındı", Net.calls["adsbdb"] >= 1)
 n = (Net.calls["opensky"], Net.calls["adsblol"], Net.calls["adsbdb"])
 Net.os_delay = 1.5; Net.logo_delay = 0
-set_ss("page", P[1]); t = time.time(); H.run(); dt = time.time() - t
+set_ss("page", "🛰️ Radar"); t = time.time(); H.run(); dt = time.time() - t
 ck("Radar'a geçiş anında (yavaş kaynak beklenmedi)", dt < 0.7 and len(SF.calls[-1][0].markers()) == 1, dt)
 ck("geçişte yeni ağ çağrısı yok", (Net.calls["opensky"], Net.calls["adsblol"], Net.calls["adsbdb"]) == n, (n, dict(Net.calls)))
 print("\nBAŞARISIZ:", FAILS if FAILS else "yok"); sys.exit(1 if FAILS else 0)
