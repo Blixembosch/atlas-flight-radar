@@ -1400,8 +1400,9 @@ import re  # noqa: E402
 
 PAGES = ["🛫 Terminal", "📒 Gözlem Defteri", "🛰️ Radar"]
 DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Terminal tarifesi: hızlı ve kilitlenmesiz
-APP_VERSION = "v0.4.9"
+APP_VERSION = "v0.5.0"
 CHANGELOG = [
+    ("v0.5.0", "SQL veritabanı ve data dalı ayrımı: main'den bağımsız düz metin SQL dökümü (db/radar.sql iterdump), ikili SQLite eşitlemesi, scripts/manage_db.py yönetim aracı ve otomatik yedekleme"),
     ("v0.4.9", "Gözlem Defteri 2. sıraya alındı, sarı tonlar kaldırılarak Terminal ile tam uyumlu koyu havacılık temasına kavuşturuldu, veritabanı önbelleği ile ultra hızlı sekmeler arası geçiş ve performans testleri"),
     ("v0.4.8", "Anında ve takılmasız sayfa geçişi, garantili tıklama alanı navigasyonu, optimize edilmiş API zaman aşımları ve modern avionik durum çubuğu"),
     ("v0.4.7", "Performans ve bütçe optimizasyonu: uçuş verisi hafıza önbelleği, hafif paralel sorgulama, SQLite disk commit ve terminal ısıtma kısıtlaması"),

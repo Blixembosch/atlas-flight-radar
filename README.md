@@ -92,12 +92,23 @@ Canlı radardaki her uçak (`build_flights`) üç aşamalı bir boru hattından 
 
 ---
 
-## 💾 Veritabanı (`SQLite`) ve GitHub `data` Dalı Kalıcılığı
+## 💾 SQL Veritabanı ve GitHub `data` Dalı Kalıcılığı
 
-Streamlit Community Cloud yeniden başladığında yerel disk sıfırlanır. Veri kaybını önlemek için `db/radar.db` dosyası GitHub deposunun **`data` dalında** (`orphan branch`) saklanır:
-* **Şema ([`db/schema.sql`](db/schema.sql)):** `meta`, `fids_flights` (tarife), `sightings` (gözlem defteri), `api_usage` (aylık kota), `fetch_log`.
-* **Açılışta Arka Plan Çekme:** Uygulama açılırken ekranı bekletmeden `data` dalındaki veritabanını indirir; bu sırada yerel kayıt oluşmuşsa `merge_from()` ile iki veritabanını kayıpsız birleştirir.
-* **Otomatik Yedekleme:** Değişiklik varsa en çok 20 dakikada bir arka planda GitHub `data` dalına yazılır (veya Gözlem Defteri'ndeki **☁️ Şimdi yedekle** düğmesiyle anında yedeklenir). `data` dalına yazmak `main` dalını tetiklemediği için uygulamayı yeniden başlatmaz.
+Streamlit Community Cloud yeniden başladığında yerel disk sıfırlanır. Veri kaybını önlemek ve ana kod dalını (`main`) veritabanı dosyalarından tamamen bağımsız tutmak için:
+* **`main` Dalı (Yalnızca Kod):** `.db` ve `.sql` veritabanı dosyaları `.gitignore` ile korunur ve ana koda asla girmez. Yalnızca şema DDL tanımı ([`db/schema.sql`](db/schema.sql)) tutulur.
+* **`data` Dalı (Kalıcı SQL DB):** Tüm veritabanı durumu GitHub deposunun **`data` dalında** (`orphan branch`) iki biçimde eşzamanlı saklanır:
+  1. `db/radar.sql`: GitHub üzerinden okunabilir, diff'lenebilir ve sürümlenebilir düz metin SQL dökümü (`iterdump`).
+  2. `db/radar.db`: Uygulamanın anında açılmasını sağlayan yüksek performanslı SQLite ikili dosyası.
+* **Açılışta Arka Plan Çekme:** Uygulama açılırken ekranı bekletmeden `data` dalındaki veritabanını indirir; bu sırada yerel kayıt oluşmuşsa kayıpsız birleştirir (`merge_remote`).
+* **Otomatik Eşitleme:** Değişiklik varsa arka planda hem ikili veritabanı hem de SQL dökümü `data` dalına yazılır. `data` dalına yazmak `main` dalını tetiklemediği için uygulamayı yeniden başlatmaz.
+* **Yönetim Aracı (`scripts/manage_db.py`):**
+  ```bash
+  python3 scripts/manage_db.py status   # Yerel DB ve data dalı durumunu incele
+  python3 scripts/manage_db.py dump     # Yerel DB'yi db/radar.sql dökümüne aktar
+  python3 scripts/manage_db.py restore  # db/radar.sql dökümünden yerel DB'yi kur
+  python3 scripts/manage_db.py pull     # data dalındaki son DB'yi çek
+  python3 scripts/manage_db.py push     # DB ve SQL dökümünü data dalına yükle
+  ```
 
 ---
 

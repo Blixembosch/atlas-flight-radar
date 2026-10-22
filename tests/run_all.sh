@@ -15,3 +15,4 @@ python3 tests/test_warm.py
 python3 tests/test_perf.py
 python3 tests/test_functional_modular.py
 python3 tests/test_page_flow_perf.py
+python3 tests/test_sql_db_sync.py

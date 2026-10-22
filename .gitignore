@@ -3,10 +3,12 @@ __pycache__/
 .venv/
 .streamlit/secrets.toml
 .DS_Store
-# Veritabanı dosyası ana dala girmez; `data` dalında tutulur
+# Veritabanı ve SQL döküm dosyaları ana dala girmez; `data` dalında tutulur
 *.db
 *.db-journal
 db/*.db
 db/*.db-journal
+db/radar.sql
+db/conflicts/
 tests/shots/
 

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS sightings (
   UNIQUE (day, icao24, callsign)
 );
 CREATE INDEX IF NOT EXISTS idx_sightings_day ON sightings (day);
+CREATE INDEX IF NOT EXISTS idx_sightings_last_seen ON sightings (last_seen DESC, id DESC);
 
 -- Harici API kota sayacı (ay bazında)
 CREATE TABLE IF NOT EXISTS api_usage (

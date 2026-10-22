@@ -34,6 +34,7 @@ def main():
       "GITHUB_REPO": repo,
       "DATA_BRANCH": os.environ.get("DATA_BRANCH", "data"),
       "DATA_DB_PATH": os.environ.get("DATA_DB_PATH", "db/radar.db"),
+      "DATA_SQL_PATH": os.environ.get("DATA_SQL_PATH", "db/radar.sql"),
       "DB_PUSH_MIN": "1",
   }
   db = radar_db.open_db(lambda k, d="": cfg.get(k, d), background=False)

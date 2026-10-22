@@ -128,12 +128,72 @@ class GitError(Exception):
 
 
 # =============================================================================
+# SQL Döküm / Geri Yükleme Yardımcıları
+# =============================================================================
+def dump_sql(path_or_db) -> str:
+  """SQLite veritabanını tutarlı bir düz metin SQL dökümüne (iterdump) çevirir.
+
+  Canlı yazmalarla çakışmayı önlemek için önce bellek içi (in-memory) anlık kopya alınır.
+  """
+  if hasattr(path_or_db, "connect"):
+    con = path_or_db.connect()
+    should_close = True
+  elif isinstance(path_or_db, (str, Path)):
+    p = Path(path_or_db)
+    if not p.exists():
+      return ""
+    con = sqlite3.connect(str(p))
+    should_close = True
+  elif isinstance(path_or_db, sqlite3.Connection):
+    con = path_or_db
+    should_close = False
+  else:
+    return ""
+
+  snap = sqlite3.connect(":memory:")
+  try:
+    con.backup(snap)
+    return "\n".join(snap.iterdump()) + "\n"
+  finally:
+    snap.close()
+    if should_close:
+      con.close()
+
+
+def restore_sql(sql_text: str, target_path: str | Path) -> bool:
+  """Düz metin SQL dökümünden SQLite veritabanını atomik ve güvenli biçimde kurar."""
+  if not sql_text or not sql_text.strip():
+    return False
+  target = Path(target_path)
+  target.parent.mkdir(parents=True, exist_ok=True)
+  fd, tmp = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=target.parent)
+  os.close(fd)
+  con = sqlite3.connect(tmp)
+  try:
+    con.executescript(sql_text)
+    con.commit()
+    chk = con.execute("PRAGMA integrity_check").fetchone()
+    if not chk or chk[0] != "ok":
+      return False
+  except Exception:
+    try:
+      os.remove(tmp)
+    except OSError:
+      pass
+    return False
+  finally:
+    con.close()
+  os.replace(tmp, target)
+  return True
+
+
+# =============================================================================
 # GitHub `data` dalı
 # =============================================================================
 class GitStore:
-  """Tek bir dosyayı (db/radar.db) GitHub deposunun `data` dalında saklar."""
+  """Tek bir dosyayı (db/radar.db) ve SQL dökümünü (db/radar.sql) GitHub deposunun `data` dalında saklar."""
 
-  def __init__(self, token, repo, branch="data", path="db/radar.db", http=None, extra_files=None):
+  def __init__(self, token, repo, branch="data", path="db/radar.db", sql_path=None, http=None, extra_files=None):
     if http is None:
       import requests as http  # noqa: PLC0415 (testlerde stdlib ile çalışsın diye geç yüklenir)
     self.http = http
@@ -142,7 +202,9 @@ class GitStore:
     self.repo = repo
     self.branch = branch
     self.path = path
-    self.sha = None            # uzaktaki dosyanın blob sha'sı
+    self.sql_path = sql_path
+    self.sha = None            # uzaktaki db/radar.db dosyasının blob sha'sı
+    self.sql_sha = None        # uzaktaki db/radar.sql dosyasının blob sha'sı
     self.branch_exists = False
     self.synced_ok = False     # ilk çekme başarıyla bitmeden push YOK
     self.last_error = ""
@@ -169,14 +231,15 @@ class GitStore:
       return "GitHub 404: depo adı yanlış ya da token bu depoya erişemiyor"
     return f"GitHub hata kodu {code}"
 
-  def _contents(self, raw=False):
-    return self._api("GET", f"/repos/{self.repo}/contents/{self.path}",
+  def _contents(self, path=None, raw=False):
+    target = path or self.path
+    return self._api("GET", f"/repos/{self.repo}/contents/{target}",
                      params={"ref": self.branch},
                      accept="application/vnd.github.raw+json" if raw else "application/vnd.github+json")
 
   # ---- çekme
   def pull(self):
-    """('ok', bytes) | ('empty', None) | ('error', None)."""
+    """('ok', bytes) | ('sql_ok', str) | ('empty', None) | ('error', None)."""
     try:
       repo_r = self._api("GET", f"/repos/{self.repo}")
       if repo_r.status_code != 200:
@@ -188,7 +251,25 @@ class GitStore:
           self.repo = fn
       except Exception:
         pass
-      r = self._contents()
+
+      r = self._contents(path=self.path)
+
+      # Eğer .db dosyası 404 ise ama sql_path varsa, sql dosyasını dene
+      if r.status_code == 404 and self.sql_path:
+        try:
+          r_sql = self._contents(path=self.sql_path)
+          if r_sql.status_code == 200:
+            js_sql = r_sql.json()
+            self.sql_sha = js_sql.get("sha")
+            content = js_sql.get("content") or ""
+            sql_text = base64.b64decode(content).decode("utf-8") if js_sql.get("encoding") == "base64" else r_sql.text
+            self.branch_exists = True
+            self.synced_ok = True
+            self.last_error = ""
+            return "sql_ok", sql_text
+        except Exception:
+          pass
+
       if r.status_code == 404:
         ref = self._api("GET", f"/repos/{self.repo}/git/ref/heads/{self.branch}")
         if ref.status_code not in (200, 404):
@@ -196,6 +277,7 @@ class GitStore:
           return "error", None
         self.branch_exists = ref.status_code == 200
         self.sha = None
+        self.sql_sha = None
         self.synced_ok = True
         self.last_error = ""
         return "empty", None
@@ -207,7 +289,7 @@ class GitStore:
       if js.get("encoding") == "base64" and js.get("content"):
         data = base64.b64decode(js["content"])
       else:  # 1 MB üstü dosyalarda içerik JSON'da gelmez
-        raw = self._contents(raw=True)
+        raw = self._contents(path=self.path, raw=True)
         if raw.status_code != 200:
           self.last_error = self._explain(raw)
           return "error", None
@@ -216,6 +298,13 @@ class GitStore:
         self.last_error = "data dalındaki dosya geçerli bir SQLite veritabanı değil"
         return "error", None
       self.sha = js.get("sha")
+      if self.sql_path:
+        try:
+          r_sql = self._contents(path=self.sql_path)
+          if r_sql.status_code == 200:
+            self.sql_sha = (r_sql.json() or {}).get("sha")
+        except Exception:
+          pass
       self.branch_exists = True
       self.synced_ok = True
       self.last_error = ""
@@ -225,19 +314,19 @@ class GitStore:
       return "error", None
 
   # ---- yükleme
-  def push(self, data, message):
+  def push(self, data, message, sql_text=None):
     if not self.synced_ok:
       self.last_error = "Önce uzaktaki veritabanı çekilmeli (veri kaybını önlemek için)"
       return False
     try:
       if not self.branch_exists:
-        return self._create_branch(data, message)
-      return self._put(data, message)
+        return self._create_branch(data, message, sql_text=sql_text)
+      return self._put(data, message, sql_text=sql_text)
     except GitError as e:
       self.last_error = str(e)
       return False
 
-  def _put(self, data, message, retry=True):
+  def _put(self, data, message, sql_text=None, retry=True):
     body = {"message": message, "content": base64.b64encode(data).decode(), "branch": self.branch}
     if self.sha:
       body["sha"] = self.sha
@@ -245,16 +334,46 @@ class GitStore:
     if r.status_code in (200, 201):
       self.sha = (r.json().get("content") or {}).get("sha", self.sha)
       self.last_error = ""
+      if self.sql_path and sql_text:
+        self._put_sql(sql_text, message)
       return True
     if r.status_code in (409, 422) and retry:  # sha eski kalmış: güncelini al, bir kez daha dene
-      cur = self._contents()
+      cur = self._contents(path=self.path)
       self.sha = cur.json().get("sha") if cur.status_code == 200 else None
-      return self._put(data, message, retry=False)
+      return self._put(data, message, sql_text=sql_text, retry=False)
     self.last_error = self._explain(r)
     return False
 
-  def _create_branch(self, data, message):
-    """Yalnızca db/radar.db içeren, ana koddan bağımsız (kök) bir `data` dalı oluşturur."""
+  def _put_sql(self, sql_text, message):
+    if not self.sql_path or not sql_text:
+      return True
+    body = {
+        "message": message,
+        "content": base64.b64encode(sql_text.encode("utf-8")).decode(),
+        "branch": self.branch,
+    }
+    if self.sql_sha:
+      body["sha"] = self.sql_sha
+    try:
+      r = self._api("PUT", f"/repos/{self.repo}/contents/{self.sql_path}", json=body)
+      if r.status_code in (200, 201):
+        self.sql_sha = (r.json().get("content") or {}).get("sha", self.sql_sha)
+        return True
+      if r.status_code in (409, 422):
+        cur = self._contents(path=self.sql_path)
+        if cur.status_code == 200:
+          self.sql_sha = cur.json().get("sha")
+          body["sha"] = self.sql_sha
+          r2 = self._api("PUT", f"/repos/{self.repo}/contents/{self.sql_path}", json=body)
+          if r2.status_code in (200, 201):
+            self.sql_sha = (r2.json().get("content") or {}).get("sha", self.sql_sha)
+            return True
+    except Exception:
+      pass
+    return False
+
+  def _create_branch(self, data, message, sql_text=None):
+    """Yalnızca veritabanı (radar.db, radar.sql) içeren, ana koddan bağımsız (kök) bir `data` dalı oluşturur."""
     base = f"/repos/{self.repo}/git"
     b = self._api("POST", f"{base}/blobs",
                   json={"content": base64.b64encode(data).decode(), "encoding": "base64"})
@@ -263,6 +382,12 @@ class GitStore:
       return False
     blob_sha = b.json()["sha"]
     entries = [{"path": self.path, "mode": "100644", "type": "blob", "sha": blob_sha}]
+    if self.sql_path and sql_text:
+      sb = self._api("POST", f"{base}/blobs",
+                     json={"content": base64.b64encode(sql_text.encode("utf-8")).decode(), "encoding": "base64"})
+      if sb.status_code == 201:
+        self.sql_sha = sb.json()["sha"]
+        entries.append({"path": self.sql_path, "mode": "100644", "type": "blob", "sha": self.sql_sha})
     for p, content in self.extra_files.items():
       eb = self._api("POST", f"{base}/blobs",
                      json={"content": base64.b64encode(content).decode(), "encoding": "base64"})
@@ -611,6 +736,33 @@ class RadarDB:
     self.dirty = True
     self.write_seq += 1
 
+  def dump_sql(self) -> str:
+    """Veritabanının anlık SQL dökümünü üretir."""
+    return dump_sql(self)
+
+  def install_remote_sql(self, sql_text):
+    """Uzaktaki SQL dökümünü yerel dosyanın yerine kurar (yalnızca açılışta)."""
+    ok = restore_sql(sql_text, self.path)
+    if not ok:
+      raise GitError("Uzaktaki SQL dökümü bozuk görünüyor, yerel dosya korunuyor")
+    with self.lock:
+      self.init_schema()
+    self.dirty = False
+
+  def merge_remote_sql(self, sql_text):
+    """Uzaktaki SQL dökümünü geçici dosyaya kurup yerel veritabanıyla birleştirir."""
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+      if restore_sql(sql_text, tmp):
+        with open(tmp, "rb") as f:
+          self.merge_remote(f.read())
+    finally:
+      try:
+        os.remove(tmp)
+      except OSError:
+        pass
+
   def startup_sync(self):
     """Uygulama açılışında bir kez: data dalındaki veritabanını getir."""
     if not self.git:
@@ -620,6 +772,14 @@ class RadarDB:
       try:
         self.install_remote(data)
       except Exception as e:  # bozuk dosya: yerel dosya kalsın, push kapalı kalsın
+        self.git.synced_ok = False
+        self.git.last_error = str(e)
+        return "error"
+    elif status == "sql_ok":
+      try:
+        self.install_remote_sql(data)
+        return "ok"
+      except Exception as e:
         self.git.synced_ok = False
         self.git.last_error = str(e)
         return "error"
@@ -641,6 +801,12 @@ class RadarDB:
               self.install_remote(data)      # yerelde henüz yazı yok: uzağı olduğu gibi al
             else:
               self.merge_remote(data)        # bu arada yazı olduysa kaybetme: birleştir
+        elif status == "sql_ok":
+          with self.lock:
+            if self.write_seq == 0:
+              self.install_remote_sql(data)
+            else:
+              self.merge_remote_sql(data)
       except Exception as e:                  # bozuk dosya: yerel kalsın, push kapalı kalsın
         self.git.synced_ok = False
         self.git.last_error = f"{type(e).__name__}: {e}"
@@ -658,10 +824,14 @@ class RadarDB:
         if status == "ok":
           self.merge_remote(data)
           seq = self.write_seq
+        elif status == "sql_ok":
+          self.merge_remote_sql(data)
+          seq = self.write_seq
       if self.git.synced_ok:
         data = self.snapshot_bytes()
+        sql_text = dump_sql(self)
         msg = "db: otomatik senkron " + time.strftime("%Y-%m-%d %H:%M", time.gmtime()) + " UTC"
-        ok = self.git.push(data, msg)
+        ok = self.git.push(data, msg, sql_text=sql_text)
     except Exception as e:  # asla uygulamayı düşürme
       self.git.last_error = f"{type(e).__name__}: {e}"
     finally:
@@ -700,20 +870,23 @@ class RadarDB:
     g = self.git
     if not g:
       return {"mode": "local", "ok": True, "dirty": self.dirty, "branch": "", "error": "",
-              "last_ok": 0.0}
+              "last_ok": 0.0, "sql_path": "", "db_path": str(self.path)}
     return {"mode": "github", "ok": bool(g.synced_ok and not g.last_error), "dirty": self.dirty,
             "branch": g.branch, "error": g.last_error, "last_ok": self.last_push_ok,
-            "synced": g.synced_ok}
+            "synced": g.synced_ok, "sql_path": getattr(g, "sql_path", "db/radar.sql"),
+            "db_path": g.path}
 
 
 def open_db(secret, path=DEFAULT_DB_PATH, http=None, background=False):
-  """secret(name, default) -> str. Ayarlar: GITHUB_TOKEN, GITHUB_REPO, DATA_BRANCH, DATA_DB_PATH, DB_PUSH_MIN."""
+  """secret(name, default) -> str. Ayarlar: GITHUB_TOKEN, GITHUB_REPO, DATA_BRANCH, DATA_DB_PATH, DATA_SQL_PATH, DB_PUSH_MIN."""
   token = secret("GITHUB_TOKEN", "")
   git = None
   if token:
     git = GitStore(token, secret("GITHUB_REPO", "Blixembosch/atlasradar"),
                    secret("DATA_BRANCH", "data") or "data",
-                   secret("DATA_DB_PATH", "db/radar.db") or "db/radar.db", http=http,
+                   path=secret("DATA_DB_PATH", "db/radar.db") or "db/radar.db",
+                   sql_path=secret("DATA_SQL_PATH", "db/radar.sql") or "db/radar.sql",
+                   http=http,
                    extra_files={"db/schema.sql": SCHEMA.strip().encode("utf-8") + b"\n"})
   try:
     interval = max(1, int(float(secret("DB_PUSH_MIN", "20")))) * 60
