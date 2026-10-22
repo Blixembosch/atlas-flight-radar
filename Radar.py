@@ -1,5 +1,5 @@
 """
-Atlas'ın Uçak Gözlem Kulesi  (v0.4.4)
+Atlas'ın Uçak Gözlem Kulesi  (v0.4.5)
   * Radar        : harita + detay paneli + gökyüzü pusulası + sesli bahçe uyarısı + FIDS füzyonu
   * Terminal     : Eindhoven Havalimanı varış / kalkış bilgi ekranı (AeroDataBox)
   * Gözlem Defteri: bahçeden görülen uçaklar + Uçak Avcısı rozetleri (SQLite, GitHub `data` dalında yedeklenir)
@@ -614,10 +614,11 @@ def _inbound(s, lat, lon):
 def _candidates(states, overflights=False, coverage_km=NEAR_KM):
   """Hangi uçaklar işlenecek?
     near    : havalimanına 50 km içinde, 10.000 ft altı
-    transit : (seçenek açıksa) evden 30 km içinde, yüksekte geçenler
+    transit : (seçenek açıksa) seçili kapsama alanı içindeki yüksek irtifa uçuşları
     inbound : 50 km dışında ama EIN'e doğru alçalanlar (kapsama genişse)
   """
   out = []
+  max_over = max(CFG.get("overflight_km", OVERFLIGHT_KM), coverage_km) if overflights else CFG.get("overflight_km", OVERFLIGHT_KM)
   for s in states:
     lon, lat = s[5], s[6]
     if lat is None or lon is None or s[8]:  # konum yok ya da yerde
@@ -628,7 +629,7 @@ def _candidates(states, overflights=False, coverage_km=NEAR_KM):
     d_home = haversine_km(lat, lon, HOME_LAT, HOME_LON)
     if d_air <= NEAR_KM and alt_ft <= MAX_SHOW_ALT_FT:
       kind = "near"
-    elif overflights and d_home <= CFG["overflight_km"]:
+    elif overflights and (d_home <= max_over or d_air <= coverage_km):
       kind = "transit"
     elif (NEAR_KM < d_air <= coverage_km and alt_ft <= INBOUND_MAX_ALT_FT
           and _inbound(s, lat, lon)):
@@ -637,6 +638,7 @@ def _candidates(states, overflights=False, coverage_km=NEAR_KM):
       continue
     out.append((s, alt_ft, kind, d_air))
   return out
+
 
 
 def _match_fids(fids_map, callsign, prefix, reg):
@@ -722,6 +724,8 @@ def build_flights(states, store, overflights=False, coverage_km=NEAR_KM, show_un
     if not has_route and not pending and not show_unknown:
       hidden += 1                                    # rotası bilinmiyor: listede/haritada gösterme
       continue
+
+
 
     akey, aname, aiata = resolve_airline(prefix, route, ac)
     if fids_row and aname in ("Bilinmiyor", prefix) and fids_row.get("airline"):
@@ -1025,7 +1029,7 @@ def chime_script_html():
   )
 
 
-def next_banner_html(flights, updated):
+def next_banner_html(flights, updated, loading=False):
   vis_now = [f for f in flights if f.get("visible")]
   if vis_now:
     f = min(vis_now, key=lambda x: x["dist_home"])
@@ -1036,6 +1040,9 @@ def next_banner_html(flights, updated):
             f"<span class='sub'>· {fmt_int(f['alt_ft'])} ft</span></span></div>")
   cand = [f for f in flights if f["eta_min"] is not None and f["alt_ft"] <= CFG["visible_alt"] * 1.6]
   if not cand:
+    if loading:
+      return (f"<div class='strip'><span class='ic'>⏳</span><span class='tx'>Canlı radar verisi alınıyor…"
+              f"<span class='sub'>· {updated}</span></span></div>")
     return (f"<div class='strip'><span class='ic'>🔭</span><span class='tx'>Şu an bahçeye yaklaşan uçak yok"
             f"<span class='sub'>· {updated}</span></span></div>")
   f = min(cand, key=lambda x: x["eta_min"])
@@ -1048,11 +1055,15 @@ def next_banner_html(flights, updated):
           f"<span class='sub'>· {fmt_int(f['alt_ft'])} ft</span></span></div>")
 
 
-def detail_html(f):
+def detail_html(f, loading=False):
   if f is None:
+    if loading:
+      return ("<div class='panel'><div class='empty'><div class='big'>⏳</div>"
+              "Canlı uçak verisi yükleniyor…<br>Haritadaki uçaklar ve detaylar birazdan görünecek.</div></div>")
     return ("<div class='panel'><div class='empty'><div class='big'>😴</div>"
             "Şu an koridorda uçak yok.<br>Haritadan ya da alttaki kartlardan bir uçak seçince"
             " burada detayları görünür.</div></div>")
+
   o, d = f["origin"], f["dest"]
   prog = f["progress"]
 
@@ -1303,9 +1314,11 @@ import re  # noqa: E402
 
 PAGES = ["🛫 Terminal", "🛰️ Radar", "📒 Gözlem Defteri"]
 DEFAULT_PAGE = PAGES[0]      # açılışta doğrudan Terminal tarifesi: hızlı ve kilitlenmesiz
-APP_VERSION = "v0.4.4"
+APP_VERSION = "v0.4.5"
 CHANGELOG = [
+    ("v0.4.5", "Üstümüzden geçen transit uçuş kapsama mantığı düzeltildi (kapsama yarıçapına göre dinamik transit filtreleme), bahçe üstündeki uçaklar asla gizlenmiyor, yükleme durumu ve otomatik yenileme aralığı optimize edildi"),
     ("v0.4.4", "Modüler mimari (radar_config, radar_styles), birleşik modern görsel tasarım ve fonksiyonel test paketi"),
+
     ("v0.4.2", "Yüksek kontrast & tam okunabilirlik (WCAG AA), Streamlit uyarı kutusu renk düzeltmesi, API ağ isteklerinde tarayıcı User-Agent başlığı ile kesintisiz canlı radar verisi"),
     ("v0.4.1", "Açılışta doğrudan Terminal, Radar ikinci sırada; Terminal ilk açılışta sıfır bloklamalı (asenkron) yükleme"),
     ("v0.4.0", "Baba-oğul sürümü: Gökyüzü Pusulası, sesli bahçe uyarısı, Terminal-Radar rota birleştirme, Avcı Rozetleri ve sıfır bloklamalı yenileme"),
@@ -1614,7 +1627,7 @@ def page_radar(db, store, demo, refresh_s_box):
     f1, f2, f3, f4, f5 = st.columns([2.6, 3.2, 2.1, 1.7, 0.6], vertical_alignment="center")
     with f3:
       overflights = st.toggle("Üstümüzden geçenler", key="f_over",
-                              help="Yüksekte (10.000 ft üstü) evimizin yakınından geçen uçaklar; haritada mor.")
+                              help="Seçili kapsama alanındaki yüksek irtifa transit uçuşları da ekler; haritada mor.")
     with f4:
       if ss["f_cov"] not in COVERAGE:
         ss["f_cov"] = list(COVERAGE)[0]
@@ -1637,8 +1650,10 @@ def page_radar(db, store, demo, refresh_s_box):
       query = st.text_input("Ara", key="f_q", placeholder="🔍 Ara: HV6710, Transavia, Athens, 737, PH-HXK...",
                             label_visibility="collapsed")
   remember(["f_over", "f_cov", "f_unk", "f_sound", "f_view", "f_q"])
-  CFG["visible_km"], CFG["visible_alt"], CFG["overflight_km"] = VISIBLE_KM, VISIBLE_ALT_FT, OVERFLIGHT_KM
   cov_km, view_km = COVERAGE[cov_label]
+  CFG["visible_km"], CFG["visible_alt"] = VISIBLE_KM, VISIBLE_ALT_FT
+  CFG["overflight_km"] = cov_km if overflights else OVERFLIGHT_KM
+
 
   # --- Veri ---
   weather = fetch_weather()
@@ -1747,7 +1762,7 @@ def page_radar(db, store, demo, refresh_s_box):
   with c_next:
     n1, n2 = st.columns([1.15, 1])
     with n1:
-      st.markdown(next_banner_html(flights, updated), unsafe_allow_html=True)
+      st.markdown(next_banner_html(flights, updated, loading=(status == "loading")), unsafe_allow_html=True)
     with n2:
       st.markdown(runway_html(runway), unsafe_allow_html=True)
 
@@ -1776,7 +1791,7 @@ def page_radar(db, store, demo, refresh_s_box):
           refresh_s_box[-1] = min(refresh_s_box[-1], 4)   # foto gelince hemen göster
         if ph:
           selected = {**selected, "photo": ph["src"], "photo_credit": ph.get("credit", "")}
-      st.markdown(detail_html(selected), unsafe_allow_html=True)
+      st.markdown(detail_html(selected, loading=(status == "loading")), unsafe_allow_html=True)
       if selected and not demo:
         if st.button(f"📒 {selected['callsign']} Uçağını Deftere Kaydet", key="spot_manual_btn",
                      use_container_width=True):
@@ -1800,9 +1815,16 @@ def page_radar(db, store, demo, refresh_s_box):
             st.button("İncele", key=f"btn_{f['id']}", on_click=select_flight,
                       args=(f["id"],), use_container_width=True)
     else:
-      hid = counts["hidden"]
-      extra = (f" Rotası bilinmediği için {hid} uçak gizlendi (⚙️ menüsünden gösterebilirsin)." if hid else "")
-      st.info("Şu an koridorda alçak uçuş görünmüyor." + extra + " Üstümüzden geçen transit uçakları görmek için 'Üstümüzden geçenler' filtresini kontrol edebilir veya üstteki 'Demo modu'nu açabilirsin.")
+      if status == "loading":
+        st.info("⏳ Canlı radar verisi çekiliyor, lütfen bekleyin...")
+      else:
+        hid = counts["hidden"]
+        extra = (f" Rotası bilinmediği için {hid} uçak gizlendi (⚙️ menüsünden gösterebilirsin)." if hid else "")
+        if overflights:
+          st.info("Şu an seçili filtrelerde ve kapsama alanında uçuş görünmüyor." + extra + " Kapsama alanını (50/100/200 km) veya arama kriterini kontrol edebilirsin.")
+        else:
+          st.info("Şu an koridorda alçak uçuş görünmüyor." + extra + " Üstümüzden geçen transit uçakları görmek için 'Üstümüzden geçenler' filtresini açabilir veya üstteki 'Demo modu'nu açabilirsin.")
+
 
     st.markdown(
         f"<div class='foot'>Uçak konumu: {esc(_SRC['last_source'] or 'OpenSky Network / adsb.lol')} · adsbdb · Open-Meteo · "
@@ -2057,7 +2079,8 @@ def main():
   # 4) Otomatik yenileme (sayfaya göre; en sonda ki sayfa hatası yenilemeyi engellemesin diye değil,
   #    sayfanın kendi aralığı belli olduktan sonra kurulur)
   if st_autorefresh is not None and box:
-    st_autorefresh(interval=box[0] * 1000, key=f"refresh_{PAGES.index(page)}")
+    st_autorefresh(interval=box[-1] * 1000, key=f"refresh_{PAGES.index(page)}")
+
 
 
 if __name__ == "__main__":

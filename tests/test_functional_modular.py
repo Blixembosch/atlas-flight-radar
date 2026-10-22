@@ -70,8 +70,30 @@ class TestFunctionalModular(unittest.TestCase):
     self.assertEqual(f["dest"]["iata"], "GÖREV")
     self.assertEqual(f["dir"], "ARR")
 
+  def test_transit_overflights_coverage_scaling(self):
+    """Kapsama alanı 100/200 km seçildiğinde ve Üstümüzden geçenler açıkken transit uçakların elenmediği."""
+    # 51.50, 6.00: evden yaklaşık 45 km uzaklıkta, 32.000 ft transit uçuş
+    # 52.00, 6.00: evden yaklaşık 70 km uzaklıkta, 35.000 ft transit uçuş
+    s_45km = ["abc1", "DLH123", "Germany", 0, 0, 6.00, 51.50, 9750, False, 220, 90, 0]
+    s_70km = ["abc2", "KLM456", "Netherlands", 0, 0, 6.00, 52.00, 10600, False, 240, 90, 0]
+
+    # overflights=False iken yüksek irtifa transit uçuşlar dahil edilmez
+    cands_off = radar._candidates([s_45km, s_70km], overflights=False, coverage_km=200)
+    self.assertEqual(len(cands_off), 0)
+
+    # overflights=True ve coverage_km=50 iken 45 km'deki transit uçak dahil edilir (eski 30 km kısıtında eleniyordu)
+    cands_50 = radar._candidates([s_45km, s_70km], overflights=True, coverage_km=50)
+    self.assertEqual(len(cands_50), 1)
+    self.assertEqual(cands_50[0][2], "transit")
+
+    # overflights=True ve coverage_km=200 iken her iki transit uçak da dahil edilir
+    cands_200 = radar._candidates([s_45km, s_70km], overflights=True, coverage_km=200)
+    self.assertEqual(len(cands_200), 2)
+    self.assertEqual(cands_200[0][2], "transit")
+    self.assertEqual(cands_200[1][2], "transit")
 
 
 if __name__ == "__main__":
+
   ok = unittest.main(exit=False).result.wasSuccessful()
   sys.exit(0 if ok else 1)
