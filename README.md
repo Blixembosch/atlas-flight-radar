@@ -238,3 +238,12 @@ streamlit run Radar.py
 | `DATA_DB_PATH` | İsteğe bağlı | SQLite yolu (Varsayılan: `db/radar.db`) |
 | `TRAFFIC_SOURCE` | İsteğe bağlı | `auto` (OpenSky → `adsb.lol`), `opensky` veya `adsblol` |
 | `HOME_LAT`, `HOME_LON` | İsteğe bağlı | Bahçe koordinatları (Varsayılan: `51.4950`, `5.4750`) |
+
+---
+
+## 11. Sürüm Yol Haritası ve Değişiklik Günlüğü (`ROADMAP.md`)
+
+Projenin başlangıcından bu yana gerçekleşen tüm sürümler, detaylı mimari dönüşümler ve gelecek planları [`ROADMAP.md`](ROADMAP.md) dosyasında tutulur:
+* **Her Push ve Sürümde Güncelleme Kuralı**: Projeye yeni bir özellik, mimari iyileştirme veya hata düzeltmesi eklendiğinde `ROADMAP.md` güncellenir.
+* **Otomasyon & Bekçi Denetimi**: [`tests/test_dokuman_bekcisi.py`](tests/test_dokuman_bekcisi.py) ve [`scripts/sync_docs.py`](scripts/sync_docs.py) her test ve push işleminde `ROADMAP.md`'nin güncel, eksiksiz ve master dokümanla uyumlu olduğunu otomatik olarak denetler.
+* **Gelecek Vizyonu**: Gelecek sürümler için planlanan push bildirimleri, 3D irtifa koridorları, sesli ATC simülasyonu ve Turso Edge libSQL entegrasyon hedefleri `ROADMAP.md` içinde listelenmiştir.

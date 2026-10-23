@@ -7,12 +7,17 @@ Anı Defteri modülünü/sekmesini kapsamalı. Eksik varsa kırmızıya döner.
 
 from __future__ import annotations
 
+import sys
 import unittest
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE_DIR))
+from scripts.sync_docs import check_roadmap_completeness
+
 README_PATH = BASE_DIR / "README.md"
 CLAUDE_PATH = BASE_DIR / "CLAUDE.md"
+ROADMAP_PATH = BASE_DIR / "ROADMAP.md"
 
 
 class TestDokumanBekcisi(unittest.TestCase):
@@ -45,6 +50,7 @@ class TestDokumanBekcisi(unittest.TestCase):
         "scripts/manage_db.py",
         "scripts/sync_fids.py",
         "scripts/sync_docs.py",
+        "ROADMAP.md",
     ]
 
     # 4. İş Akışları (Workflows)
@@ -110,6 +116,28 @@ class TestDokumanBekcisi(unittest.TestCase):
     readme_text = README_PATH.read_text(encoding="utf-8")
     self.assertIn("Otomasyon Notu", claude_text, "CLAUDE.md otomasyon başlığı içermeli!")
     self.assertIn(readme_text.splitlines()[0], claude_text, "CLAUDE.md README içeriğini kapsamalı!")
+
+  def test_roadmap_md_kapsami(self):
+    """ROADMAP.md dosyasının var olduğunu, sürüm tablosunu ve gelecek planlarını kapsadığını doğrular."""
+    self.assertTrue(ROADMAP_PATH.exists(), "ROADMAP.md dosyası bulunamadı!")
+    roadmap_text = ROADMAP_PATH.read_text(encoding="utf-8")
+    self.assertIn("# 🗺️ Atlas Flight Radar", roadmap_text)
+    self.assertIn("📌 Sürüm Özeti", roadmap_text)
+    self.assertIn("🚀 Sürüm Detayları", roadmap_text)
+    self.assertIn("🔮 Gelecek Yol Haritası", roadmap_text)
+
+    # Önemli sürüm işaretleri kontrolü
+    for ver in ["v0.5.2", "v0.5.1", "v0.5.0", "v0.4.9", "v0.4.0", "v0.1.0"]:
+      self.assertIn(ver, roadmap_text, f"ROADMAP.md içinde {ver} sürümü bulunmalı!")
+
+    # Temel modül ve özellik kontrolü
+    for feature in ["Terminal", "Gözlem Defteri", "Anı Defteri", "Radar", "Pydeck", "Kapsam Bekçisi", "Doküman Bekçisi"]:
+      self.assertIn(feature.lower(), roadmap_text.lower(), f"ROADMAP.md içinde {feature} bulunmalı!")
+
+    # sync_docs check_roadmap_completeness fonksiyonunu test et
+    missing = check_roadmap_completeness(roadmap_text)
+    self.assertEqual(len(missing), 0, f"ROADMAP.md eksik bölümler: {missing}")
+    self.assertTrue(len(check_roadmap_completeness("eksik")) > 0)
 
 
 if __name__ == "__main__":

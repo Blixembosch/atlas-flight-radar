@@ -22,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 README_FILE = ROOT / "README.md"
 CLAUDE_FILE = ROOT / "CLAUDE.md"
+ROADMAP_FILE = ROOT / "ROADMAP.md"
 
 REQUIRED_SECTIONS = [
     ("Sayfalar", ["Terminal", "Gözlem Defteri", "Anı Defteri", "Radar"]),
@@ -29,7 +30,7 @@ REQUIRED_SECTIONS = [
         "Radar.py", "radar_db.py", "radar_fids.py",
         "radar_config.py", "radar_styles.py", "radar_auth.py", "radar_motion.py"
     ]),
-    ("Araçlar & Betikler", ["scripts/manage_db.py", "scripts/sync_fids.py", "scripts/sync_docs.py"]),
+    ("Araçlar & Betikler", ["scripts/manage_db.py", "scripts/sync_fids.py", "scripts/sync_docs.py", "ROADMAP.md"]),
     ("İş Akışları (Workflows)", ["tests.yml", "sync_data.yml", "Kurulum"]),
     ("Veritabanı & data Dalı", ["data dalı", "radar.sql", "radar.db", "iterdump", "schema.sql"]),
     ("Anı Defteri Modülü", ["Anı Defteri", "Uçak Avcısı", "Rozet", "Rütbe"]),
@@ -45,6 +46,13 @@ def check_readme_completeness(readme_text: str) -> list[str]:
     for item in items:
       if item.lower() not in lower_text:
         missing.append(f"[{category}] -> {item}")
+  return missing
+
+
+def check_roadmap_completeness(roadmap_text: str) -> list[str]:
+  """ROADMAP.md dosyasının gerekli tüm bölümleri ve sürümleri içerdiğini doğrular."""
+  required = ["📌 Sürüm Özeti", "🚀 Sürüm Detayları", "🔮 Gelecek Yol Haritası", "v0.5.2", "v0.5.0", "v0.4.0"]
+  missing = [r for r in required if r not in roadmap_text]
   return missing
 
 
@@ -76,6 +84,23 @@ def sync_documentation(check_only: bool = False) -> int:
       return 1
   else:
     print("✅ README.md tüm sayfa, çekirdek modül, araç, workflow ve Anı Defteri kapsamını eksiksiz içeriyor.")
+
+  # ROADMAP.md kontrolü
+  if not ROADMAP_FILE.exists():
+    print(f"❌ Hata: {ROADMAP_FILE} bulunamadı!")
+    if check_only:
+      return 1
+  else:
+    roadmap_text = ROADMAP_FILE.read_text(encoding="utf-8")
+    missing_roadmap = check_roadmap_completeness(roadmap_text)
+    if missing_roadmap:
+      print("❌ ROADMAP.md içerisinde eksik başlıklar var:")
+      for mr in missing_roadmap:
+        print(f"  • {mr}")
+      if check_only:
+        return 1
+    else:
+      print("✅ ROADMAP.md sürüm geçmişi ve yol haritası eksiksiz doğrulandı.")
 
   claude_content = generate_claude_md(readme_text)
 
